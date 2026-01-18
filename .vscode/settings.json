@@ -1,0 +1,3 @@
+{
+  "rust-analyzer.cargo.sysrootSrc": "${workspaceFolder}/rust-lib-src"
+}

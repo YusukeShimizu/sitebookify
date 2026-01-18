@@ -1,0 +1,32 @@
+/target
+/.direnv/
+/result
+/result-*
+
+# direnv local overrides (secrets etc.)
+.envrc.local
+
+# LLM / agent helper docs
+AGENTS.md
+/.codex/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# Rust stdlib sources (symlinked by direnv / devShell)
+/rust-lib-src
+
+# Node / Mintlify
+node_modules/
+docs/.mintlify/
+
+# Vale (cache)
+.vale/
+
+# Vale packages (downloaded by `vale sync`)
+docs/styles/*
+!docs/styles/config/
+!docs/styles/config/**
