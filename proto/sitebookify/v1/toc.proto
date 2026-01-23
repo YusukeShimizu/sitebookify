@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package sitebookify.v1;
+
+import "buf/validate/validate.proto";
+
+// Toc represents the structure of `toc.yaml` (chapter layout for book rendering).
+message Toc {
+  string book_title = 1 [(buf.validate.field).string.min_len = 1];
+  repeated TocPart parts = 2 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message TocPart {
+  string title = 1 [(buf.validate.field).string.min_len = 1];
+  repeated TocChapter chapters = 2 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message TocChapter {
+  // Chapter identifier (used as file name like `ch01.md`).
+  string id = 1 [(buf.validate.field).string.pattern = "^ch[0-9]{2}$"];
+
+  // Human-readable chapter title.
+  string title = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Ordered list of ManifestRecord IDs included in this chapter.
+  repeated string sources = 3 [
+    (buf.validate.field).repeated.min_items = 1,
+    (buf.validate.field).repeated.items.string.pattern = "^p_[0-9a-f]{64}$"
+  ];
+}

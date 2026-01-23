@@ -19,6 +19,13 @@ AGENTS.md
 # Rust stdlib sources (symlinked by direnv / devShell)
 /rust-lib-src
 
+# Sitebookify outputs
+/raw/
+/extracted/
+/book/
+/manifest.jsonl
+/toc.yaml
+
 # Node / Mintlify
 node_modules/
 docs/.mintlify/

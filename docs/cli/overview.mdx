@@ -1,0 +1,141 @@
+---
+title: CLI Overview
+description: Commands and the end-to-end workflow.
+---
+
+Sitebookify is a CLI-only tool (MVP).
+
+## Compile and run from source
+
+```sh
+nix develop -c cargo build --release
+./target/release/sitebookify --help
+```
+
+If you want to run via Cargo:
+
+```sh
+nix develop -c cargo run -- crawl --url https://example.com/docs/ --out raw
+```
+
+## Workflow
+
+The typical workflow is:
+
+0. `build` (one-shot: runs everything into a workspace directory)
+1. `crawl` (Raw snapshot)
+2. `extract` (Extracted Pages snapshot)
+3. `manifest` (JSONL index)
+4. `toc init` (YAML chapter layout)
+5. `book init` (mdBook skeleton)
+6. `book render` (generate `book/src/`)
+
+## Commands
+
+### `build`
+
+Run the full pipeline (crawl → extract → manifest → toc init → book init → book render) in one command.
+
+```sh
+sitebookify build \
+  --url https://example.com/docs/ \
+  --out workspace \
+  --title "Example Docs Textbook"
+```
+
+Workspace layout (MVP):
+
+```text
+<out>/
+  raw/
+  extracted/
+  manifest.jsonl
+  toc.yaml
+  book/
+```
+
+Notes (MVP):
+
+- Workspaces are write-once: if `--out` already exists, `build` fails.
+- Crawl flags (`--max-pages`, `--max-depth`, `--concurrency`, `--delay-ms`) are supported.
+
+### `crawl`
+
+Fetch pages under the start URL and save HTML into a Raw snapshot directory.
+
+```sh
+sitebookify crawl \
+  --url https://example.com/docs/ \
+  --out raw
+```
+
+Notes (MVP):
+
+- URL normalization removes query strings (`?...`), fragments (`#...`), and trailing slashes (except `/`).
+- Only the same origin and the start path subtree are crawled.
+- Only `text/html` responses are saved as Raw HTML.
+- Raw snapshots are write-once: if `--out` already exists, `crawl` fails.
+- Crawling uses `spider` (spider-rs).
+
+Main flags:
+
+- `--max-pages` (default: 200)
+- `--max-depth` (default: 8)
+- `--concurrency` (default: 4)
+- `--delay-ms` (default: 200)
+
+### `extract`
+
+Convert Raw HTML files into Extracted Pages (Markdown with YAML front matter).
+
+```sh
+sitebookify extract --raw raw --out extracted
+```
+
+Notes (MVP):
+
+- Extracted snapshots are write-once: if `--out` already exists, `extract` fails.
+- Main content extraction uses Mozilla Readability (Firefox Reader Mode) via `readability-js`.
+
+### `manifest`
+
+Build `manifest.jsonl` from `extracted/pages/*.md`.
+
+```sh
+sitebookify manifest --extracted extracted --out manifest.jsonl
+```
+
+### `toc init`
+
+Generate an initial `toc.yaml` from `manifest.jsonl`.
+
+```sh
+sitebookify toc init --manifest manifest.jsonl --out toc.yaml
+```
+
+If you want to override the generated book title:
+
+```sh
+sitebookify toc init --manifest manifest.jsonl --out toc.yaml --book-title "My Book"
+```
+
+### `book init`
+
+Create an mdBook skeleton.
+
+```sh
+sitebookify book init --out book --title "Example Docs Textbook"
+```
+
+### `book render`
+
+Render chapters based on `toc.yaml` and `manifest.jsonl`.
+
+```sh
+sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book
+```
+
+Notes (MVP):
+
+- `book/` is treated as generated output.
+- Every generated chapter includes a `## Sources` section.

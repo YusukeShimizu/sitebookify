@@ -1,0 +1,49 @@
+---
+title: Extracted Pages Format
+description: Extracted Markdown pages (`extracted/pages/*.md`).
+---
+
+Extracted Pages are the output of `sitebookify extract`.
+
+Main content extraction uses Mozilla Readability (Firefox Reader Mode) via `readability-js`.
+
+## Directory layout
+
+```text
+extracted/
+  pages/
+    p_<sha256_hex>.md
+```
+
+## File structure
+
+Each extracted page is a Markdown file with YAML front matter.
+
+```md
+---
+id: "p_<sha256_hex>"
+url: "https://example.com/docs/intro"
+retrieved_at: "2026-01-23T10:25:00Z"
+raw_html_path: "raw/html/example.com/docs/intro/index.html"
+title: "Intro"
+---
+
+# Intro
+
+...body...
+```
+
+Front matter fields (MVP):
+
+- `id`: `p_` + sha256 hex of the normalized URL.
+- `url`: normalized URL (query and fragment removed).
+- `retrieved_at`: RFC 3339 timestamp.
+- `raw_html_path`: filesystem path to the corresponding Raw HTML.
+- `title`: extracted page title.
+
+## Snapshot constraints
+
+Extracted Pages are treated as immutable.
+
+- `sitebookify extract` MUST NOT overwrite existing files under `extracted/`.
+- If the output directory already exists, `extract` fails (MVP behavior).

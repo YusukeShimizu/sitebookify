@@ -1,0 +1,46 @@
+---
+title: Raw Format
+description: Crawl outputs (`raw/`) and `crawl.jsonl`.
+---
+
+The Raw snapshot is the output of `sitebookify crawl`.
+
+## Directory layout
+
+```text
+raw/
+  crawl.jsonl
+  html/
+    <host_or_host_port>/<path...>/index.html
+```
+
+## `crawl.jsonl`
+
+`crawl.jsonl` is JSON Lines (one JSON object per line).
+
+Fields (MVP):
+
+- `url` (string): requested URL (normalized).
+- `normalized_url` (string): URL after normalization.
+  - Fragments (`#...`) are removed.
+  - Query strings (`?...`) are removed.
+  - Trailing slashes are removed (except for `/` itself).
+- `depth` (number): BFS-like traversal depth (start URL is `0`).
+- `status` (number): HTTP status code.
+  - If the request fails, `0` is recorded.
+- `content_type` (string, optional): response Content-Type.
+- `retrieved_at` (string): RFC 3339 timestamp.
+- `raw_html_path` (string, optional): filesystem path to the saved HTML.
+  - Only set for `text/html` + 2xx responses.
+
+## Snapshot constraints
+
+Raw snapshots are treated as immutable.
+
+- `sitebookify crawl` MUST NOT overwrite existing files under `raw/`.
+- If the output directory already exists, `crawl` fails (MVP behavior).
+
+## Host and port mapping
+
+If the URL includes an explicit port, `:` is replaced with `_` in the directory name.
+Example: `127.0.0.1:12345` → `127.0.0.1_12345`

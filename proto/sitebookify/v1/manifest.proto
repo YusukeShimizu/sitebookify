@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package sitebookify.v1;
+
+import "buf/validate/validate.proto";
+
+// ManifestRecord is a single line (JSONL) record in `manifest.jsonl`.
+//
+// It is derived from Extracted Pages under `extracted/pages/*.md`.
+message ManifestRecord {
+  // Stable page identifier (`p_` + sha256 hex of the normalized URL).
+  string id = 1 [(buf.validate.field).string.pattern = "^p_[0-9a-f]{64}$"];
+
+  // Normalized URL (query and fragment removed).
+  string url = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Human-readable title extracted from HTML.
+  string title = 3 [(buf.validate.field).string.min_len = 1];
+
+  // URL path component (example: `/docs/intro`).
+  string path = 4 [(buf.validate.field).string.min_len = 1];
+
+  // Filesystem path to the extracted Markdown file.
+  string extracted_md = 5 [(buf.validate.field).string.min_len = 1];
+}

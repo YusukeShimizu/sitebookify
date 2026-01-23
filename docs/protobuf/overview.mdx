@@ -1,5 +1,5 @@
 ---
-title: Protobuf Overview
+title: Proto Schemas Overview
 description: Where schemas live and how they are managed with Buf.
 ---
 
@@ -12,19 +12,16 @@ All Protobuf schemas live in `proto/`.
 
 ## Dependencies
 
-This template uses:
+This repository uses:
 
-- Google API annotations (HTTP transcoding, field behaviors, resource descriptors): `googleapis/googleapis`
 - Validation annotations: `bufbuild/protovalidate`
 
-## Example API
+## On-disk schemas
 
-This template includes a small example API at `proto/template/v1/greetings.proto`.
-It is designed to be replaced with your project's real resources and services, but it demonstrates:
+Sitebookify stores most data as JSONL / YAML / Markdown.
+The Protobuf files in `proto/` are used as schema references for on-disk formats (not as a public API).
 
-- Resource naming (`name`) and `google.api.resource` annotations
-- Standard methods (Get/List/Create/Update/Delete)
-- HTTP JSON transcoding (`google.api.http`)
-- Request validation using Protovalidate (`buf.validate.*`)
+- Manifest schema: `proto/sitebookify/v1/manifest.proto`
+- TOC schema: `proto/sitebookify/v1/toc.proto`
 
-Next: [Resource-oriented design (AIP)](/protobuf/resource-oriented)
+Next: [Protovalidate](/protobuf/validation)

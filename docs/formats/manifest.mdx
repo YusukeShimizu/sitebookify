@@ -1,0 +1,21 @@
+---
+title: Manifest Format
+description: Manifest schema and intent.
+---
+
+The Manifest is the output of `sitebookify manifest`.
+
+`manifest.jsonl` is JSON Lines (one JSON object per line).
+Each line corresponds to one Extracted Page.
+
+## Fields (MVP)
+
+- `id` (string): Extracted Page ID (`p_<sha256_hex>`).
+- `url` (string): normalized URL.
+- `title` (string): extracted title.
+- `path` (string): URL path component (example: `/docs/intro`).
+- `extracted_md` (string): filesystem path to the extracted Markdown file.
+
+## Proto schema
+
+The schema corresponds to `proto/sitebookify/v1/manifest.proto` (`ManifestRecord`).

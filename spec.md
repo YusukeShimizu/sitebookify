@@ -1,7 +1,7 @@
-# Rust Template Specification
+# Sitebookify Specification
 
-このリポジトリは、Rust プロジェクトを開始するための汎用テンプレートである。
-本書（`spec.md`）は、テンプレートに含める機能と開発上の不変条件を定義する。
+このリポジトリは、Sitebookify（公開サイトをクロールし、mdBook 形式の Markdown 素材を生成する CLI）である。
+本書（`spec.md`）は、Sitebookify に含める要件と不変条件を定義する。
 
 本書は、arXiv:2508.14511v2 に準拠する。
 対象論文のタイトルは「What You See Is What It Does」である。
@@ -54,23 +54,80 @@ operational principle
 ```
 
 ```text
-concept RustCLI
+concept SitebookifyCLI
 purpose
-    Rust のツールチェーンと CI 配線を検証するための最小 CLI を提供する。
+    ログイン不要の公開サイトをクロールし、Markdown 素材を生成する。
+    章立て（TOC）に従って mdBook 形式の教科書 Markdown を出力する。
+    robots.txt は MVP では未対応である。
 state
     binary_name: string
+    raw_dir: string
+    extracted_dir: string
+    manifest_path: string
+    toc_path: string
+    book_dir: string
 actions
-    hello [ ]
-        => [ exit_code: 0 ; stdout: "Hello, world!\n" ]
-        CLI 引数の parse 後に debug ログ `"parsed cli"` を出力する。
-    hello [ name: string ]
-        => [ exit_code: 0 ; stdout: "Hello, <NAME>!\n" ]
-        CLI 引数の parse 後に debug ログ `"parsed cli"` を出力する。
+    crawl [
+        url: string
+        out: string
+        max_pages: number
+        max_depth: number
+        concurrency: number
+        delay_ms: number
+    ]
+        => [ exit_code: 0 ]
+        write `raw/crawl.jsonl` and `raw/html/**/index.html`
+        do not overwrite existing snapshot files
+    extract [ raw: string ; out: string ]
+        => [ exit_code: 0 ]
+        write `extracted/pages/*.md`
+        do not overwrite existing snapshot files
+    manifest [ extracted: string ; out: string ]
+        => [ exit_code: 0 ]
+        write `manifest.jsonl`
+    toc_init [
+        manifest: string
+        out: string
+        book_title: string (optional)
+    ]
+        => [ exit_code: 0 ]
+        write `toc.yaml`
+    book_init [ out: string ; title: string ]
+        => [ exit_code: 0 ]
+        write `book/book.toml` and `book/src/*`
+    book_render [ toc: string ; manifest: string ; out: string ]
+        => [ exit_code: 0 ]
+        write `book/src/SUMMARY.md` and `book/src/chapters/*.md`
+        ensure every chapter includes `## Sources`
+    build [
+        url: string
+        out: string
+        title: string
+        max_pages: number
+        max_depth: number
+        concurrency: number
+        delay_ms: number
+    ]
+        => [ exit_code: 0 ]
+        write `<OUT>/raw/**`, `<OUT>/extracted/**`, `<OUT>/manifest.jsonl`, `<OUT>/toc.yaml`, and `<OUT>/book/**`
+        do not overwrite existing snapshot files
 operational principle
-    after hello [ ]
-        => [ exit_code: 0 ; stdout: "Hello, world!\n" ]
-    then hello [ name: "Alice" ]
-        => [ exit_code: 0 ; stdout: "Hello, Alice!\n" ]
+    after crawl [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/raw" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ]
+        => [ exit_code: 0 ]
+    then extract [ raw: "<TMP>/raw" ; out: "<TMP>/extracted" ]
+        => [ exit_code: 0 ]
+    then manifest [ extracted: "<TMP>/extracted" ; out: "<TMP>/manifest.jsonl" ]
+        => [ exit_code: 0 ]
+    then toc_init [ manifest: "<TMP>/manifest.jsonl" ; out: "<TMP>/toc.yaml" ]
+        => [ exit_code: 0 ]
+    then book_init [ out: "<TMP>/book" ; title: "Test Book" ]
+        => [ exit_code: 0 ]
+    then book_render [ toc: "<TMP>/toc.yaml" ; manifest: "<TMP>/manifest.jsonl" ; out: "<TMP>/book" ]
+        => [ exit_code: 0 ]
+        `book/src/chapters/ch01.md` contains `## Sources`
+    after build [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/workspace" ; title: "Test Book" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ]
+        => [ exit_code: 0 ]
+        `<TMP>/workspace/book/src/chapters/ch01.md` contains `## Sources`
 ```
 
 ```text
@@ -90,7 +147,7 @@ actions
 operational principle
     after init [ ]
         => [ ]
-    then RustCLI/hello [ ]
+    then SitebookifyCLI/crawl [ url: "http://example.com/" ; out: "raw" ; max_pages: 1 ; max_depth: 0 ; concurrency: 1 ; delay_ms: 0 ]
         => [ exit_code: 0 ]
 ```
 
@@ -124,12 +181,14 @@ actions
     run [ ]
         => [ ok: boolean ]
         run `cargo test --all`
+        include an end-to-end pipeline test for `build` (internally runs `crawl` → `extract` → `manifest` → `toc init` → `book render`)
 ```
 
 ```text
 concept Protobuf
 purpose
     Protobuf スキーマを Buf で管理する。
+    Protobuf は API ではなく、オンディスク形式（Manifest/TOC）のスキーマとして扱う。
 state
     proto_dir: string
     buf_yaml: string
