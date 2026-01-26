@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 
 use crate::cli::{
-    BookInitArgs, BookRenderArgs, BuildArgs, CrawlArgs, ExtractArgs, ManifestArgs, TocInitArgs,
+    BookBundleArgs, BookInitArgs, BookRenderArgs, BuildArgs, CrawlArgs, ExtractArgs,
+    LlmTranslateArgs, ManifestArgs, TocInitArgs, TocRefineArgs,
 };
 
 pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
@@ -22,6 +23,7 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     let manifest_path = workspace_dir.join("manifest.jsonl");
     let toc_path = workspace_dir.join("toc.yaml");
     let book_dir = workspace_dir.join("book");
+    let bundled_md_path = workspace_dir.join("book.md");
 
     tracing::info!(url = %args.url, out = %workspace_dir.display(), "build: crawl");
     crate::crawl::run(CrawlArgs {
@@ -49,13 +51,31 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     })
     .context("manifest")?;
 
-    tracing::info!("build: toc init");
-    crate::toc::init(TocInitArgs {
-        manifest: manifest_path.to_string_lossy().to_string(),
-        out: toc_path.to_string_lossy().to_string(),
-        book_title: Some(args.title.clone()),
-    })
-    .context("toc init")?;
+    if args.toc_refine {
+        tracing::info!("build: toc refine");
+        crate::toc::refine(TocRefineArgs {
+            manifest: manifest_path.to_string_lossy().to_string(),
+            out: toc_path.to_string_lossy().to_string(),
+            book_title: Some(args.title.clone()),
+            engine: args.toc_refine_engine,
+            command: args.toc_refine_command.clone(),
+            command_args: args.toc_refine_command_args.clone(),
+            openai_model: args.openai_model.clone(),
+            openai_base_url: args.openai_base_url.clone(),
+            openai_temperature: args.openai_temperature,
+            force: false,
+        })
+        .await
+        .context("toc refine")?;
+    } else {
+        tracing::info!("build: toc init");
+        crate::toc::init(TocInitArgs {
+            manifest: manifest_path.to_string_lossy().to_string(),
+            out: toc_path.to_string_lossy().to_string(),
+            book_title: Some(args.title.clone()),
+        })
+        .context("toc init")?;
+    }
 
     tracing::info!("build: book init");
     crate::book::init(BookInitArgs {
@@ -72,5 +92,53 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     })
     .context("book render")?;
 
+    tracing::info!("build: book bundle");
+    crate::book::bundle(BookBundleArgs {
+        book: book_dir.to_string_lossy().to_string(),
+        out: bundled_md_path.to_string_lossy().to_string(),
+        force: false,
+    })
+    .context("book bundle")?;
+
+    if let Some(to) = &args.translate_to {
+        let translated_out = args.translate_out.clone().unwrap_or_else(|| {
+            default_translated_md_path(workspace_dir.as_path(), to)
+                .to_string_lossy()
+                .to_string()
+        });
+
+        tracing::info!(to = %to, out = %translated_out, "build: llm translate");
+        crate::llm::translate(LlmTranslateArgs {
+            input: bundled_md_path.to_string_lossy().to_string(),
+            out: translated_out,
+            to: to.clone(),
+            engine: args.translate_engine,
+            command: args.translate_command.clone(),
+            command_args: args.translate_command_args.clone(),
+            openai_model: args.openai_model.clone(),
+            openai_base_url: args.openai_base_url.clone(),
+            openai_max_chars: args.openai_max_chars,
+            openai_temperature: args.openai_temperature,
+            force: false,
+        })
+        .await
+        .context("llm translate")?;
+    }
+
     Ok(())
+}
+
+fn default_translated_md_path(workspace_dir: &std::path::Path, to: &str) -> PathBuf {
+    let mut slug = String::new();
+    for ch in to.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            slug.push(ch);
+        } else {
+            slug.push('_');
+        }
+    }
+    if slug.trim_matches('_').is_empty() {
+        slug = "translated".to_owned();
+    }
+    workspace_dir.join(format!("book.{slug}.md"))
 }

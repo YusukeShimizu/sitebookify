@@ -59,6 +59,32 @@ rust-analyzer が標準ライブラリ（`std`）を解析できるように、�
 sitebookify build --url https://example.com/docs/ --out workspace --title "Example Docs Textbook"
 ```
 
+翻訳まで含める場合は、`--translate-to` を指定する。
+
+```sh
+sitebookify build \
+  --url https://example.com/docs/ \
+  --out workspace \
+  --title "Example Docs Textbook" \
+  --translate-to ja \
+  --translate-engine openai \
+  --openai-model gpt-4.1
+```
+
+章立て（chapter と順序）も LLM で自動調整したい場合は `--toc-refine` を指定する。
+
+```sh
+sitebookify build \
+  --url https://example.com/docs/ \
+  --out workspace \
+  --title "Example Docs Textbook" \
+  --toc-refine \
+  --toc-refine-engine openai \
+  --openai-model gpt-4.1 \
+  --translate-to ja \
+  --translate-engine openai
+```
+
 ワークスペースの中身（MVP）は次の通り。
 
 ```text
@@ -68,6 +94,8 @@ workspace/
   manifest.jsonl
   toc.yaml
   book/
+  book.md
+  book.<LANG>.md
 ```
 
 手動で実行したい場合は、次の順に実行する。
@@ -77,8 +105,58 @@ sitebookify crawl --url https://example.com/docs/ --out raw
 sitebookify extract --raw raw --out extracted
 sitebookify manifest --extracted extracted --out manifest.jsonl
 sitebookify toc init --manifest manifest.jsonl --out toc.yaml
+# 章立てを LLM で調整したい場合（任意）
+sitebookify toc refine --manifest manifest.jsonl --out toc.refined.yaml --book-title "Example Docs Textbook" --engine openai --openai-model gpt-4.1
 sitebookify book init --out book --title "Example Docs Textbook"
-sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book
+# toc refine を実行しない場合は `--toc toc.yaml` を指定する
+sitebookify book render --toc toc.refined.yaml --manifest manifest.jsonl --out book
+```
+
+## 1ファイル出力（Bundle）
+
+`book render` 後に、mdBook 出力を 1 つの Markdown に統合して出力できる。
+
+```sh
+sitebookify book bundle --book book --out book.md
+```
+
+## 翻訳（LLM）
+
+`book bundle` の出力（例: `book.md`）を翻訳できる。
+翻訳時は、できるだけ元の Markdown 形態を保つ。
+
+- 翻訳コマンドは **stdin で Markdown を受け取り、stdout に Markdown を返す**フィルタとして動作する必要がある。
+- 目標言語は環境変数 `SITEBOOKIFY_TRANSLATE_TO` で渡される。
+
+```sh
+# 例: 翻訳エンジンとして外部コマンドを呼び出す
+sitebookify llm translate --in book.md --out book.ja.md --to ja --engine command --command <TRANSLATOR> -- <ARGS...>
+```
+
+OpenAI API で翻訳する場合は `openai` を使う。
+API キーは環境変数 `OPENAI_API_KEY` で渡す。
+
+```sh
+echo 'export OPENAI_API_KEY=...' > .envrc.local
+direnv allow
+sitebookify llm translate --in book.md --out book.ja.md --to ja --engine openai --openai-model gpt-4.1
+```
+
+入力が大きい場合は `--openai-max-chars` で分割サイズを調整する。
+
+翻訳せずに（動作確認用に）入力をそのまま出力したい場合は `noop` を使う。
+
+```sh
+sitebookify llm translate --in book.md --out book.copy.md --to ja --engine noop
+```
+
+## 出力（Export）
+
+統合/翻訳済み Markdown を `pandoc` 経由で `epub` / `pdf` 等に変換できる。
+
+```sh
+sitebookify export --in book.ja.md --out book.epub --format epub --title "Example Docs Textbook"
+sitebookify export --in book.ja.md --out book.pdf --format pdf --title "Example Docs Textbook"
 ```
 
 ## Logging

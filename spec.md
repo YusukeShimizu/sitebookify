@@ -58,6 +58,7 @@ concept SitebookifyCLI
 purpose
     ログイン不要の公開サイトをクロールし、Markdown 素材を生成する。
     章立て（TOC）に従って mdBook 形式の教科書 Markdown を出力する。
+    mdBook 出力を 1 つの Markdown に統合し、LLM 翻訳と各種フォーマット変換の前処理にできるようにする。
     robots.txt は MVP では未対応である。
 state
     binary_name: string
@@ -66,6 +67,8 @@ state
     manifest_path: string
     toc_path: string
     book_dir: string
+    bundle_path: string
+    translated_bundle_path: string
 actions
     crawl [
         url: string
@@ -92,6 +95,17 @@ actions
     ]
         => [ exit_code: 0 ]
         write `toc.yaml`
+    toc_refine [
+        manifest: string
+        out: string
+        book_title: string (optional)
+        engine: string (optional)
+    ]
+        => [ exit_code: 0 ]
+        write refined `toc.yaml`
+        when engine is "openai", require env `OPENAI_API_KEY` and call OpenAI Responses API
+        when engine is "command", invoke an external command as a filter (stdin -> stdout)
+        do not overwrite existing output files
     book_init [ out: string ; title: string ]
         => [ exit_code: 0 ]
         write `book/book.toml` and `book/src/*`
@@ -99,6 +113,21 @@ actions
         => [ exit_code: 0 ]
         write `book/src/SUMMARY.md` and `book/src/chapters/*.md`
         ensure every chapter includes `## Sources`
+    book_bundle [ book: string ; out: string ]
+        => [ exit_code: 0 ]
+        read `book/src/SUMMARY.md` and `book/src/**/*.md`
+        write a single Markdown file that concatenates chapters in SUMMARY order
+        do not overwrite existing output files
+    llm_translate [ input: string ; out: string ; to: string ; engine: string ]
+        => [ exit_code: 0 ]
+        write a translated Markdown file
+        when engine is "openai", require env `OPENAI_API_KEY` and call OpenAI Responses API
+        when engine is "command", invoke an external command as a filter (stdin -> stdout)
+        do not overwrite existing output files
+    export [ input: string ; out: string ; format: string ]
+        => [ exit_code: 0 ]
+        write `out` converted from `input` (e.g. epub/pdf via external tools)
+        do not overwrite existing output files
     build [
         url: string
         out: string
@@ -107,9 +136,15 @@ actions
         max_depth: number
         concurrency: number
         delay_ms: number
+        toc_refine: boolean (optional)
+        toc_refine_engine: string (optional)
+        translate_to: string (optional)
+        translate_engine: string (optional)
     ]
         => [ exit_code: 0 ]
         write `<OUT>/raw/**`, `<OUT>/extracted/**`, `<OUT>/manifest.jsonl`, `<OUT>/toc.yaml`, and `<OUT>/book/**`
+        write `<OUT>/book.md`
+        when `translate_to` is set, write `<OUT>/book.<LANG>.md`
         do not overwrite existing snapshot files
 operational principle
     after crawl [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/raw" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ]
@@ -125,9 +160,14 @@ operational principle
     then book_render [ toc: "<TMP>/toc.yaml" ; manifest: "<TMP>/manifest.jsonl" ; out: "<TMP>/book" ]
         => [ exit_code: 0 ]
         `book/src/chapters/ch01.md` contains `## Sources`
-    after build [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/workspace" ; title: "Test Book" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ]
+    then book_bundle [ book: "<TMP>/book" ; out: "<TMP>/book.md" ]
+        => [ exit_code: 0 ]
+        `<TMP>/book.md` contains `## Sources`
+    after build [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/workspace" ; title: "Test Book" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ; toc_refine: true ; toc_refine_engine: "noop" ; translate_to: "ja" ; translate_engine: "noop" ]
         => [ exit_code: 0 ]
         `<TMP>/workspace/book/src/chapters/ch01.md` contains `## Sources`
+        `<TMP>/workspace/book.md` contains `## Sources`
+        `<TMP>/workspace/book.ja.md` contains `## Sources`
 ```
 
 ```text
@@ -181,7 +221,7 @@ actions
     run [ ]
         => [ ok: boolean ]
         run `cargo test --all`
-        include an end-to-end pipeline test for `build` (internally runs `crawl` → `extract` → `manifest` → `toc init` → `book render`)
+        include an end-to-end pipeline test for `build` (internally runs `crawl` → `extract` → `manifest` → `toc init` → `book render` → `book bundle` → `llm translate` when enabled)
 ```
 
 ```text

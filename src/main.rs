@@ -32,10 +32,18 @@ async fn try_main() -> anyhow::Result<()> {
         sitebookify::cli::Command::Manifest(args) => {
             sitebookify::manifest::run(args).context("manifest")?;
         }
+        sitebookify::cli::Command::Export(args) => {
+            sitebookify::export::run(args).context("export")?;
+        }
         sitebookify::cli::Command::Toc {
             command: sitebookify::cli::TocCommand::Init(args),
         } => {
             sitebookify::toc::init(args).context("toc init")?;
+        }
+        sitebookify::cli::Command::Toc {
+            command: sitebookify::cli::TocCommand::Refine(args),
+        } => {
+            sitebookify::toc::refine(args).await.context("toc refine")?;
         }
         sitebookify::cli::Command::Book {
             command: sitebookify::cli::BookCommand::Init(args),
@@ -46,6 +54,18 @@ async fn try_main() -> anyhow::Result<()> {
             command: sitebookify::cli::BookCommand::Render(args),
         } => {
             sitebookify::book::render(args).context("book render")?;
+        }
+        sitebookify::cli::Command::Book {
+            command: sitebookify::cli::BookCommand::Bundle(args),
+        } => {
+            sitebookify::book::bundle(args).context("book bundle")?;
+        }
+        sitebookify::cli::Command::Llm {
+            command: sitebookify::cli::LlmCommand::Translate(args),
+        } => {
+            sitebookify::llm::translate(args)
+                .await
+                .context("llm translate")?;
         }
     }
 

@@ -56,10 +56,12 @@
               just
               mermaid-cli
               nodejs_20
+              pandoc
               rust-analyzer
               rustLibSrc
               rustc
               rustfmt
+              tectonic
               vale
             ])
             ++ [

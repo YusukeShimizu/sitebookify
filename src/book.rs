@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 
-use crate::cli::{BookInitArgs, BookRenderArgs};
+use crate::cli::{BookBundleArgs, BookInitArgs, BookRenderArgs};
 use crate::formats::{ManifestRecord, Toc};
 
 pub fn init(args: BookInitArgs) -> anyhow::Result<()> {
@@ -89,6 +89,71 @@ pub fn render(args: BookRenderArgs) -> anyhow::Result<()> {
                 .with_context(|| format!("write chapter: {}", chapter.id))?;
         }
     }
+
+    Ok(())
+}
+
+pub fn bundle(args: BookBundleArgs) -> anyhow::Result<()> {
+    let book_dir = PathBuf::from(&args.book);
+    let src_dir = book_dir.join("src");
+    let summary_path = src_dir.join("SUMMARY.md");
+    let summary_md = std::fs::read_to_string(&summary_path)
+        .with_context(|| format!("read SUMMARY.md: {}", summary_path.display()))?;
+
+    let chapter_rel_paths = parse_summary_chapter_paths(&summary_md);
+    if chapter_rel_paths.is_empty() {
+        anyhow::bail!(
+            "no chapter links found in SUMMARY.md: {}",
+            summary_path.display()
+        );
+    }
+
+    let out_path = PathBuf::from(&args.out);
+    if out_path.exists() && !args.force {
+        anyhow::bail!("bundle output already exists: {}", out_path.display());
+    }
+    if let Some(parent) = out_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create bundle parent dir: {}", parent.display()))?;
+    }
+
+    let mut bundled = String::new();
+    if let Some(title) = read_book_title(&book_dir)? {
+        bundled.push_str(&format!("# {title}\n\n"));
+    }
+
+    for (idx, rel_path) in chapter_rel_paths.iter().enumerate() {
+        let chapter_path = src_dir.join(rel_path);
+        let chapter_md = std::fs::read_to_string(&chapter_path)
+            .with_context(|| format!("read chapter: {}", chapter_path.display()))?;
+
+        if idx != 0 && !bundled.ends_with('\n') {
+            bundled.push('\n');
+        }
+        if idx != 0 {
+            bundled.push('\n');
+        }
+
+        bundled.push_str(chapter_md.trim_end());
+        bundled.push('\n');
+    }
+
+    let mut out_options = OpenOptions::new();
+    out_options.write(true);
+    if args.force {
+        out_options.create(true).truncate(true);
+    } else {
+        out_options.create_new(true);
+    }
+    let mut out = out_options
+        .open(&out_path)
+        .with_context(|| format!("open bundle output: {}", out_path.display()))?;
+    out.write_all(bundled.as_bytes())
+        .with_context(|| format!("write bundle output: {}", out_path.display()))?;
+    out.flush()
+        .with_context(|| format!("flush bundle output: {}", out_path.display()))?;
 
     Ok(())
 }
@@ -201,4 +266,56 @@ fn strip_leading_h1(body: &str) -> &str {
     }
 
     &body[offset..]
+}
+
+fn parse_summary_chapter_paths(summary_md: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in summary_md.lines() {
+        let Some(target) = parse_markdown_link_target(line) else {
+            continue;
+        };
+        let path = match target.split_once('#') {
+            Some((path, _)) => path,
+            None => target.as_str(),
+        };
+        let path = path.trim();
+        if path.starts_with("http://") || path.starts_with("https://") {
+            continue;
+        }
+        if !path.ends_with(".md") {
+            continue;
+        }
+        paths.push(path.to_owned());
+    }
+    paths
+}
+
+fn parse_markdown_link_target(line: &str) -> Option<String> {
+    let link_start = line.find("](")?;
+    let after = &line[link_start + 2..];
+    let link_end = after.find(')')?;
+    Some(after[..link_end].to_owned())
+}
+
+fn read_book_title(book_dir: &std::path::Path) -> anyhow::Result<Option<String>> {
+    let book_toml_path = book_dir.join("book.toml");
+    if !book_toml_path.exists() {
+        return Ok(None);
+    }
+    let contents = std::fs::read_to_string(&book_toml_path)
+        .with_context(|| format!("read book.toml: {}", book_toml_path.display()))?;
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with("title") {
+            let Some((_, rhs)) = line.split_once('=') else {
+                continue;
+            };
+            let rhs = rhs.trim();
+            if let Some(stripped) = rhs.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                return Ok(Some(stripped.to_owned()));
+            }
+        }
+    }
+    Ok(None)
 }

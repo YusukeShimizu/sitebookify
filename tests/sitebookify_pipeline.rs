@@ -1,11 +1,13 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use predicates::prelude::*;
-use sitebookify::formats::{CrawlRecord, Toc};
+use sitebookify::formats::{CrawlRecord, ManifestRecord, Toc};
 
 fn spawn_docs_server() -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
     let server = tiny_http::Server::http("127.0.0.1:0").expect("start tiny_http server");
@@ -147,6 +149,14 @@ fn count_files_with_extension(dir: &Path, extension: &str) -> anyhow::Result<usi
     Ok(count)
 }
 
+fn pandoc_available() -> bool {
+    Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 #[test]
 fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let (base_url, shutdown_tx, server_handle) = spawn_docs_server();
@@ -177,6 +187,10 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
         "2",
         "--delay-ms",
         "0",
+        "--translate-to",
+        "ja",
+        "--translate-engine",
+        "noop",
     ])
     .assert()
     .success();
@@ -227,10 +241,202 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let toc: Toc = serde_yaml::from_str(&toc_yaml).expect("parse toc yaml");
     assert_eq!(toc.book_title, "Test Book");
 
+    let manifest_records: Vec<ManifestRecord> = fs::read_to_string(&manifest_path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("parse manifest record json"))
+        .collect();
+    assert!(
+        !manifest_records.is_empty(),
+        "expected manifest to be non-empty"
+    );
+
+    let refined_toc_path = workspace_dir.join("toc.refined.yaml");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "toc",
+        "refine",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--out",
+        refined_toc_path.to_str().unwrap(),
+        "--book-title",
+        "Test Book",
+        "--engine",
+        "noop",
+    ])
+    .assert()
+    .success();
+
+    let refined_yaml = fs::read_to_string(&refined_toc_path)?;
+    let refined: Toc = serde_yaml::from_str(&refined_yaml).expect("parse refined toc yaml");
+    assert_eq!(refined.book_title, "Test Book");
+    assert_eq!(refined.parts.len(), 1, "expected exactly one part");
+    assert_eq!(
+        refined.parts[0].chapters.len(),
+        manifest_records.len(),
+        "expected one chapter per manifest record in noop mode"
+    );
+
+    let mut manifest_sorted = manifest_records.clone();
+    manifest_sorted.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let mut seen_ids = HashSet::new();
+    for (idx, chapter) in refined.parts[0].chapters.iter().enumerate() {
+        assert_eq!(chapter.id, format!("ch{:02}", idx + 1));
+        assert!(!chapter.title.trim().is_empty());
+        assert_eq!(chapter.sources.len(), 1);
+        assert_eq!(chapter.sources[0], manifest_sorted[idx].id);
+        assert_eq!(chapter.title, manifest_sorted[idx].title);
+        assert!(seen_ids.insert(chapter.sources[0].clone()));
+    }
+
+    let manifest_ids: HashSet<String> = manifest_records.into_iter().map(|r| r.id).collect();
+    assert_eq!(seen_ids, manifest_ids);
+
+    let openai_refined_toc_path = workspace_dir.join("toc.openai.yaml");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.env_remove("OPENAI_API_KEY")
+        .args([
+            "toc",
+            "refine",
+            "--manifest",
+            manifest_path.to_str().unwrap(),
+            "--out",
+            openai_refined_toc_path.to_str().unwrap(),
+            "--engine",
+            "openai",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("OPENAI_API_KEY is not set"));
+
     let ch01_path = book_dir.join("src").join("chapters").join("ch01.md");
     let ch01 = fs::read_to_string(ch01_path)?;
     assert!(ch01.contains("## Sources"));
     assert!(ch01.contains(&format!("{base_url}/docs")));
+
+    let bundle_md_path = workspace_dir.join("book.md");
+    assert!(bundle_md_path.exists(), "expected book.md to exist");
+    let bundle_md = fs::read_to_string(&bundle_md_path)?;
+    assert!(bundle_md.contains("# Test Book"));
+    assert!(bundle_md.contains("## Sources"));
+
+    let built_translated_md_path = workspace_dir.join("book.ja.md");
+    assert!(
+        built_translated_md_path.exists(),
+        "expected book.ja.md to exist"
+    );
+    let built_translated_md = fs::read_to_string(&built_translated_md_path)?;
+    assert_eq!(built_translated_md, bundle_md);
+
+    let bundle2_md_path = workspace_dir.join("book.bundle2.md");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "book",
+        "bundle",
+        "--book",
+        book_dir.to_str().unwrap(),
+        "--out",
+        bundle2_md_path.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+    assert_eq!(fs::read_to_string(&bundle2_md_path)?, bundle_md);
+
+    // Bundled outputs MUST NOT be overwritten.
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "book",
+        "bundle",
+        "--book",
+        book_dir.to_str().unwrap(),
+        "--out",
+        bundle2_md_path.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("already exists"));
+
+    let translated_md_path = workspace_dir.join("book.translated.md");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "llm",
+        "translate",
+        "--in",
+        bundle_md_path.to_str().unwrap(),
+        "--out",
+        translated_md_path.to_str().unwrap(),
+        "--to",
+        "ja",
+        "--engine",
+        "noop",
+    ])
+    .assert()
+    .success();
+
+    let translated_md = fs::read_to_string(&translated_md_path)?;
+    assert_eq!(translated_md, bundle_md);
+
+    let openai_translated_md_path = workspace_dir.join("book.openai.md");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.env_remove("OPENAI_API_KEY")
+        .args([
+            "llm",
+            "translate",
+            "--in",
+            bundle_md_path.to_str().unwrap(),
+            "--out",
+            openai_translated_md_path.to_str().unwrap(),
+            "--to",
+            "ja",
+            "--engine",
+            "openai",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("OPENAI_API_KEY is not set"));
+
+    // Translated outputs MUST NOT be overwritten.
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "llm",
+        "translate",
+        "--in",
+        bundle_md_path.to_str().unwrap(),
+        "--out",
+        translated_md_path.to_str().unwrap(),
+        "--to",
+        "ja",
+        "--engine",
+        "noop",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("already exists"));
+
+    if pandoc_available() {
+        let epub_path = workspace_dir.join("book.epub");
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+        cmd.args([
+            "export",
+            "--in",
+            translated_md_path.to_str().unwrap(),
+            "--out",
+            epub_path.to_str().unwrap(),
+            "--format",
+            "epub",
+            "--title",
+            "Test Book",
+        ])
+        .assert()
+        .success();
+        assert!(epub_path.exists(), "expected epub to exist");
+        assert!(
+            fs::metadata(epub_path)?.len() > 0,
+            "expected epub to be non-empty"
+        );
+    }
 
     // Snapshot outputs MUST NOT be overwritten.
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");

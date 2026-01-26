@@ -60,7 +60,7 @@ book/
       ch01.md
 ```
 
-補足:
+補足は次のとおり。
 
 - `manifest.jsonl` と `toc.yaml` はリポジトリ直下に置く。
   - 将来、`--workspace <dir>` でルートを切り替えできるようにする。
@@ -120,7 +120,7 @@ sitebookify build \
   - `workspace/toc.yaml`
   - `workspace/book/**`
 
-注意:
+注意事項は次のとおり。
 
 - `workspace/` は write-once とする（既に存在する場合は失敗して良い）。
 - `crawl` と同じ polite 設定（`--max-pages` / `--max-depth` / `--concurrency` / `--delay-ms`）を受け取る。
@@ -155,7 +155,7 @@ sitebookify crawl \
 {"url":"https://example.com/docs/intro","normalized_url":"https://example.com/docs/intro","depth":1,"status":200,"content_type":"text/html","retrieved_at":"2026-01-23T10:25:00Z","raw_html_path":"raw/html/example.com/docs/intro/index.html"}
 ```
 
-注意:
+注意事項は次のとおり。
 
 - Content-Type が `text/html` 以外は保存しない（MVP）。
 - 失敗（非 2xx）は記録する。
@@ -198,7 +198,7 @@ title: "Intro"
 ...本文...
 ```
 
-抽出アルゴリズム（MVP）:
+抽出アルゴリズム（MVP）は次のとおり。
 
 - Mozilla Readability（Firefox Reader Mode）を `readability-js` 経由で利用する。
 - `Readability` インスタンスは `extract` 実行中に再利用する。
@@ -276,7 +276,7 @@ MVP では以下を満たす。
 - 少なくとも `ch01.md` を生成する。
 - 各章末尾に `## Sources` と URL 一覧を出力する。
 
-章テンプレ（MVP）:
+章テンプレ（MVP）は次のとおり。
 
 - Objectives
 - Prerequisites

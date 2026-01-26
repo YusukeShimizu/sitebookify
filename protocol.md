@@ -18,6 +18,8 @@
 - **Manifest**: Extracted Page の台帳（JSONL）。
 - **TOC**: 教科書の章立て（YAML）。
 - **Book**: mdBook プロジェクト（`book/`）。
+- **Bundled Markdown**: mdBook（`book/`）を 1 ファイルに統合した Markdown（任意のパス）。
+- **Export**: Bundled Markdown から生成した変換成果物（例: `epub`, `pdf`）。
 
 ## ディレクトリ構成（MVP）
 
@@ -37,6 +39,10 @@ book/
     SUMMARY.md
     chapters/
       ch01.md
+book.md (optional)
+book.<LANG>.md (optional)
+book.epub (optional)
+book.pdf (optional)
 ```
 
 ## `raw/crawl.jsonl`
@@ -120,3 +126,22 @@ Extracted Page は Markdown ファイルである。
 
 - 章 Markdown は必ず `## Sources` を含む。
 - `## Sources` には、章に含まれる出典 URL を列挙する。
+
+## Bundled Markdown（`book bundle`）
+
+Bundled Markdown は生成物である。
+`book/src/SUMMARY.md` の順序で章を連結し、単一の Markdown ファイルとして出力する。
+
+注意事項は次のとおり。
+
+- Bundled Markdown の出力先パスは `sitebookify book bundle --out <FILE>` で指定する。
+- 出力ファイルが既に存在する場合は失敗する（上書きしない）。
+
+## Export（`export`）
+
+Export は生成物である。
+Bundled Markdown を入力に、外部ツール（例: `pandoc`）で `epub` / `pdf` 等へ変換する。
+
+注意事項は次のとおり。
+
+- 出力ファイルが既に存在する場合は失敗する（上書きしない）。

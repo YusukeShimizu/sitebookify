@@ -4,7 +4,7 @@
 
 ## ゴールを「mdBookプロジェクト」に固定するのが強い
 
-教科書づくりは、最終的に
+教科書づくりは、最終的に次の要素を揃える。
 
 * 章立て（TOC）
 * 本文（統一された文体・用語）
@@ -12,9 +12,11 @@
 * 演習・小テスト
 * 参考リンク・出典
 
-を「本としてビルドできる形」に揃えるのが勝ちです。
+これらを「本としてビルドできる形」に揃えることが重要です。
 
-そこで **“本のソース”は mdBook（Markdown群＋SUMMARY.md）に固定** します。mdBookはRust製で、本/教材/チュートリアルに向いていて、プラグイン（preprocessor/backend）も多いです。 ([GitHub][1])
+そこで **“本のソース”は mdBook（Markdown 群＋SUMMARY.md）に固定** する。
+mdBook は Rust 製で、本/教材/チュートリアルに向いている。
+プラグイン（preprocessor/backend）も多い。 ([GitHub][1])
 
 ---
 
@@ -34,7 +36,8 @@
 
   * Firefoxのリーダーモードと同系のアルゴリズムで「本文だけ」を抜きやすい。
   * **CLI（`readable`）があって、URL/HTMLファイル/STDINから“Markdown”で出力**できる。 ([Docs.rs][3])
-  * 大量処理では `Readability` の初期化が重いので、最終的にライブラリ組み込みでインスタンス再利用が効く設計がよい（初期化~30ms、パース~10msの記述あり）。 ([Docs.rs][3])
+  * 大量処理では `Readability` の初期化コストは高い。
+  * 最終的にはライブラリに組み込み、インスタンスを再利用できる設計が望ましい（初期化~30ms、パース~10msの記述あり）。 ([Docs.rs][3])
 
 * 代替（抽出が崩れるサイト向け）: **html-to-markdown（Rustコア）**
 
@@ -85,12 +88,12 @@ PDFは「見栄え」と「安定性」で2系統を用意すると楽です。
 
 ### フェーズA: クロールして「ページ集合」を確定
 
-出力物（例）:
+出力物（例）は次のとおり。
 
 * `data/urls.jsonl`（URL一覧、親子関係、タイトル、取得日時、hash）
 * `data/html/...`（HTML保存）
 
-ポイント:
+ポイントは次のとおり。
 
 * 階層構造は **URLパス** と **パンくず/サイドバー** の両方を材料にする
 * サイトに `sitemap.xml` があれば最強（まずそれを種にする）
@@ -98,12 +101,12 @@ PDFは「見栄え」と「安定性」で2系統を用意すると楽です。
 
 ### フェーズB: 抽出して「教材素材Markdown」にする
 
-出力物（例）:
+出力物（例）は次のとおり。
 
 * `data/extracted/*.md`（1ページ=1素材）
 * 各ファイル先頭にメタデータ（出典URL・取得日・タイトル・見出し構造）
 
-抽出戦略:
+抽出戦略は次のとおり。
 
 * まず `readable`（readability-js-cli）で本文Markdown化 ([Docs.rs][3])
 * うまく抜けないページだけ html-to-markdown 系にフォールバック ([Docs.rs][4])
@@ -112,7 +115,7 @@ PDFは「見栄え」と「安定性」で2系統を用意すると楽です。
 
 ここが「サイト階層→教科書」変換の本丸。
 
-最初は割り切りでOKです：
+最初は割り切りで OK とする。
 
 * **URLの階層 = 暫定の章立て**
 
@@ -122,7 +125,7 @@ PDFは「見栄え」と「安定性」で2系統を用意すると楽です。
   * “参照用ページ” と “学習順ページ” が混ざっていたら、
   * **学習順を優先して並び替える**（LLMが得意）
 
-出力物:
+出力物は次のとおり。
 
 * `book/src/SUMMARY.md`（mdBookの目次）
 * `book/src/**/*.md`（章ファイル）
@@ -138,7 +141,7 @@ LLMの使いどころは「本文を丸ごと生成」ではなく、次の編�
 * “何を覚えるべきか” を箇条書きで締める
 * 重要事項を admonish（囲み）に落とす
 
-mdBook側で演習/小テストを実装したいなら：
+mdBook 側で演習/小テストを実装したいなら、次を使う。
 
 * 演習: mdbook-exercises ([GitHub][7])
 * 小テスト: mdbook-quiz ([GitHub][6])
@@ -176,7 +179,7 @@ cargo install mdbook-typst
 # typst CLIはmdbook-typst READMEの手順に従う（例: cargo install --git ...） :contentReference[oaicite:25]{index=25}
 ```
 
-クロールしてHTMLを落とす（例）:
+クロールして HTML を保存する例は次のとおり。
 
 ```sh
 spider --url https://example.com/docs download -t data/html
@@ -184,7 +187,7 @@ spider --url https://example.com/docs download -t data/html
 
 （`download` でHTMLを保存できる例が示されています） ([Docs.rs][14])
 
-HTML→Markdown抽出（例）:
+HTML→Markdown 抽出の例は次のとおり。
 
 ```sh
 # 例: ファイルごとに readable を通す
@@ -196,7 +199,7 @@ find data/html -name '*.html' -print0 | xargs -0 -I{} sh -c '
 
 `readable` はファイル/URL/STDINを処理してMarkdownを出せます。 ([Docs.rs][3])
 
-mdBookに突っ込む（まずは雑でOK）:
+mdBook に取り込む例は次のとおり。
 
 ```sh
 mdbook init book
@@ -205,7 +208,7 @@ cp data/extracted/*.md book/src/
 mdbook build book
 ```
 
-PDFをTypstで出すには `book/book.toml` に以下を追加（最小）:
+PDF を Typst で出すには、`book/book.toml` に以下を追加する（最小）。
 
 ```toml
 [output.typst]
@@ -247,13 +250,13 @@ format = "pdf"
 * まとめ（箇条書き）
 * 参考（出典URLの一覧）
 
-mdBook側の表現は
+mdBook 側の表現は次のプラグインで実装できる。
 
 * 囲み: mdbook-admonish ([Docs.rs][5])
 * 演習: mdbook-exercises ([GitHub][7])
 * 小テスト: mdbook-quiz ([GitHub][6])
 
-で実装できます。
+
 
 ---
 
@@ -277,7 +280,7 @@ mdBook側の表現は
 4. **権利/利用条件**
 
 * 教科書化は二次利用・派生物になりやすい
-  → 最低限「出典URL保持」「利用規約/ライセンス確認」「社内利用か公開か」の線引きは最初に
+  → 最低限「出典 URL の保持」「利用規約/ライセンスの確認」「社内利用と公開の線引き」は最初に決める。
 
 ---
 
@@ -292,7 +295,8 @@ mdBook側の表現は
 
 ---
 
-必要なら、この設計を **“実装しやすいRustプロジェクト構成（crate分割・データ形式・コマンド設計）”** まで落として、`textbookify` のコマンド（例: `crawl` / `extract` / `toc` / `draft` / `build`）案も具体化します。
+必要なら、この設計を **“実装しやすい Rust プロジェクト構成（crate 分割・データ形式・コマンド設計）”** まで落とし込む。
+さらに、`textbookify` のコマンド案（例: `crawl` / `extract` / `toc` / `draft` / `build`）も具体化する。
 
 [1]: https://github.com/rust-lang/mdBook?utm_source=chatgpt.com "GitHub - rust-lang/mdBook: Create book from markdown files. Like ..."
 [2]: https://docs.rs/crate/spider_cli/latest?utm_source=chatgpt.com "spider_cli 2.38.88 - Docs.rs"
@@ -354,19 +358,24 @@ book/src/chapters/*.md（章本文）
 
 
 
-コツ：LLMはExtractedを編集しない。必ず Book 側に新規に書く。
+コツ: LLM は Extracted を編集しない。必ず Book 側へ新規で書く。
 
 
 2) “詰める”ための中間成果物：manifest と toc を先に作る
 (A) manifest.jsonl（ページ台帳）
-1行1ページでOK。最低限これだけ入れると強いです。
+1 行 1 ページで OK です。最低限、次の項目を入れると強いです。
+
+```json
 {"id":"p_001","url":"...","title":"...","path":"/docs/guide/intro","breadcrumbs":["Docs","Guide"],"extracted_md":"extracted/pages/p_001.md"}
+```
 
 
 これがあると、**「未収録ページ」「重複」「章への割当」**が機械的に管理できます。
 
 (B) toc.yaml（教科書の章立て＝編集方針）
 ここが “サイト階層 → 学習順” の変換レイヤ。
+
+```yaml
 book_title: "XXX 教科書"
 parts:
   - title: "Part 1: 基礎"
@@ -382,6 +391,7 @@ parts:
       - id: "ch10"
         title: "実装パターン"
         sources: ["p_101","p_102"]
+```
 
 この toc.yaml が決まれば、あとは自動化できます。
 
@@ -423,28 +433,23 @@ LLMにいきなり「全部まとめて教科書にして」は、ほぼ確実�
 各ページに対して、まず 200〜500字のカードを作ります。
 
 
-cards/<page_id>.md
+```md
+# cards/<page_id>.md
 
-
-何が書いてあるか（要点3つ）
-
-
-前提知識
-
-
-重要用語
-
-
-“このページの位置づけ”（導入/詳細/リファレンス/FAQ）
+## 何が書いてあるか（要点3つ）
+## 前提知識
+## 重要用語
+## “このページの位置づけ”（導入/詳細/リファレンス/FAQ）
+```
 
 
 
 
 これをやると、章の設計精度が跳ねます。
-ステップ2：toc.yaml をLLMに“提案”させ、人間が確定する
+ステップ2：toc.yaml を LLM に“提案”させ、人間が確定する。
 
 
-LLMは manifest + cards から章立て案を作る
+LLM は manifest + cards から章立て案を作る。
 
 
 人間は「学習順になってるか」「重複がまとまってるか」だけ見る
@@ -455,52 +460,39 @@ LLMは manifest + cards から章立て案を作る
 chapter_packets/ch01.md みたいに、章に紐づく素材だけを結合した入力を作ります。
 
 
-章の学習目標（tocから）
+```md
+# chapter_packets/ch01.md
 
-
-含めるページのカード
-
-
-含めるページの本文（必要部分だけでもOK）
-
-
-出典URL一覧
+## 章の学習目標（toc から）
+## 含めるページのカード
+## 含めるページの本文（必要部分だけでも OK）
+## 出典 URL 一覧
+```
 
 
 → LLMは ch01 packetだけ読んで ch01 を書く。これでコンテキスト爆発を防ぎます。
 ステップ4：章本文はテンプレ固定（教科書の型）
-各章はこのテンプレに必ず合わせる：
+各章はこのテンプレに必ず合わせる。
 
-
-学習目標（3〜5）
-
-
-前提
-
-
-本文（概念→例→注意点）
-
-
-よくある間違い
-
-
-ミニ演習（3問）
-
-
-小テスト（5問）
-
-
-まとめ
-
-
-Sources（出典URL）
+```text
+- 学習目標（3〜5）
+- 前提
+- 本文（概念→例→注意点）
+- よくある間違い
+- ミニ演習（3問）
+- 小テスト（5問）
+- まとめ
+- Sources（出典 URL）
+```
 
 
 
 5) AGENTS.md を用意して、エージェントの暴走を防ぐ（超重要）
-Codexは AGENTS.md を自動検出して指示として使えます。 
-最初からこれを書いておくと、生成の品質が安定します。
-例（かなり実用寄り）：
+Codex は AGENTS.md を自動検出して指示として使える。
+最初からこれを書いておくと、生成の品質が安定する。
+例（かなり実用寄り）は次のとおり。
+
+```md
 # AGENTS.md - Textbook Builder Rules
 
 ## Goal
@@ -536,25 +528,19 @@ Create a textbook-style document in `book/src/` using source materials in `extra
 3) Write/update `book/src/chapters/<chapter_id>.md`.
 4) Update `book/src/SUMMARY.md`.
 
+```
+
 
 6) まずの“完成定義”（MVP）を1つ決める
-あなたの今の段階なら、最初のMVPはこれが最強です：
+あなたの今の段階なら、最初の MVP はこれが最強です。
 MVP-1（最短で形が出る）
 
 
-spider → readability 済みで extracted/pages/*.md ができている
-
-
-manifest.jsonl ができている
-
-
-toc.yaml ができている（章5〜10程度）
-
-
-book/src/chapters/ch01.md だけ教科書テンプレで完成している
-
-
-Sourcesが付いている
+- spider → readability 済みで `extracted/pages/*.md` ができている。
+- `manifest.jsonl` ができている。
+- `toc.yaml` ができている（章 5〜10 程度）。
+- `book/src/chapters/ch01.md` だけ教科書テンプレで完成している。
+- Sources が付いている。
 
 
 これができれば、あとは「章を増やす」だけの作業に落ちます。
@@ -563,37 +549,26 @@ Sourcesが付いている
 あなたの「spider→readability→goose/codexでまとめる」を、実装タスクに落とすとこうです。
 
 
-出力ディレクトリ設計を確定（上の3レイヤ）
-
-
-extract結果に必ずメタデータを入れる（url/title/取得日）
-
-
-manifest.jsonl を生成（自動）
-
-
-toc.yaml を作る（LLM提案→人間確定）
-
-
-chapter_packets/ を作る（章ごとに素材を束ねる）
-
-
-Codex or goose で book/src/chapters/ を生成
-
-
-QA（Sources必須、未収録ページ検出）
+- 出力ディレクトリ設計を確定する（上の 3 レイヤ）。
+- extract 結果に必ずメタデータを入れる（url/title/取得日）。
+- `manifest.jsonl` を生成する（自動）。
+- `toc.yaml` を作る（LLM 提案→人間確定）。
+- `chapter_packets/` を作る（章ごとに素材を束ねる）。
+- Codex または goose で `book/src/chapters/` を生成する。
+- QA を行う（Sources 必須、未収録ページ検出）。
 
 
 
 もし「詰める」をさらに一段進めるなら、次は **“toc.yaml をどう自動で初期生成するか（URL階層/パンくず/ナビ）”**が一番効きます。
-ただ、ここでは質問で止めずに進める案として：
+ただ、ここでは質問で止めずに進める案を示す。
 
 
-まずURLパス階層でtocを自動生成（雑でOK）
+- まず URL パス階層で toc を自動生成する（雑で OK）。
 
 
-その後 カード要約→toc再編 をLLMにやらせる
+- その後、カード要約→toc 再編を LLM に行わせる。
 
 
 この順番が最短で「学習順の目次」に到達します。
-必要なら、manifest.jsonl と toc.yaml を生成するための Rust CLI（最小） のコマンド設計（crawl/extract/manifest/toc-draft/packetize）まで一気に落とします。
+必要なら、manifest.jsonl と toc.yaml を生成するための Rust CLI（最小）を設計する。
+コマンド案は `crawl` / `extract` / `manifest` / `toc-draft` / `packetize` である。

@@ -1,6 +1,7 @@
 # LLM 介入設計（Mode B / 簡単な本 / 1ページ=1章）
 
-本書は、`sitebookify` の決定的なパイプライン（crawl→extract→manifest→toc→book）を土台にしつつ、LLM を「必要なフェーズだけ」介入させて、日本語の「全体を網羅した簡単な本」体裁の mdBook を生成するための設計である。
+本書は、`sitebookify` の決定的なパイプライン（crawl→extract→manifest→toc→book）を土台にする。
+LLM を「必要なフェーズだけ」介入させ、日本語の「全体を網羅した簡単な本」体裁の mdBook を生成するための設計である。
 
 本設計は **Mode B**（本文も翻訳する）かつ **1ページ=1章** を前提とする。
 
@@ -40,8 +41,8 @@
 ### セキュリティと秘密情報
 
 - API キー等の秘密情報はリポジトリに書き込まない（MUST NOT）。
-  - 実行時環境変数（例: `.envrc.local`）で注入する（MUST）。
-- 入力サイトに機微情報が含まれる可能性がある場合、送信可否の判断は利用者が行う（MUST）。
+  - 実行時の環境変数（例: `.envrc.local`）で注入する（MUST）。
+- 入力サイトに機微情報を含む可能性のある場合、送信可否の判断は利用者が行う（MUST）。
 
 ---
 
@@ -120,22 +121,22 @@ sitebookify extract --raw raw --out extracted.en
 
 目的: `extracted.en/pages/*.md` を日本語へ翻訳し、`extracted.ja/pages/*.md` を生成する。
 
-入力（ページごと）:
+入力（ページごと）は次のとおり。
 
 - `extracted.en/pages/<page_id>.md`（front matter + 本文）
 
-出力（ページごと）:
+出力（ページごと）は次のとおり。
 
 - `extracted.ja/pages/<page_id>.md`
 
-必須要件:
+必須要件は次のとおり。
 
 - front matter の `id`, `url`, `retrieved_at`, `raw_html_path` は原文からコピーする（MUST）。
 - front matter の `title` は日本語化してよい（SHOULD）。
 - 本文は「要約」ではなく「翻訳」である（MUST）。
 - コードブロック、インラインコード、URL は改変しない（MUST NOT）。
 
-推奨:
+推奨事項は次のとおり。
 
 - 章タイトルのために `title_ja` / `title_en` のようなメタ情報を front matter に追加してもよい（MAY）。
 
@@ -159,22 +160,22 @@ sitebookify toc init --manifest manifest.jsonl --out toc.yaml
 
 目的: **1ページ=1章** を維持しつつ、読書順序と章タイトルを「簡単な本として自然」に整える。
 
-入力（最小）:
+入力（最小）は次のとおり。
 
 - `manifest.jsonl` 由来の Page 一覧（`id`, `path`, `title`, `url`）
 
-入力（推奨）:
+入力（推奨）は次のとおり。
 
 - 各ページの見出し一覧（抽出 Markdown から機械的に抽出）
   - ページ本文全部を渡さずに設計できるため、コストと漏洩リスクを下げる。
 
-出力（推奨: 構造化）:
+出力（推奨: 構造化）は次のとおり。
 
 - `TocPlan`（JSON）
   - `chapters[]` は必ず page id を 1 つずつ持つ。
   - 章の順序と章タイトルのみが編集対象である。
 
-`TocPlan` の例（概念）:
+`TocPlan` の例（概念）は次のとおり。
 
 ```json
 {
@@ -195,7 +196,7 @@ sitebookify book init --out book --title "Example Docs Textbook"
 sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book
 ```
 
-出力:
+出力は次のとおり。
 
 - `book/src/SUMMARY.md`
 - `book/src/chapters/*.md`（本文は抽出結果を元に生成され、補助テキスト部分が TODO の状態）
@@ -204,12 +205,12 @@ sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book
 
 目的: 本文（翻訳済み）を維持したまま、「簡単な本」として読みやすくするための短い補助テキストを付ける。
 
-入力（章ごと、最小）:
+入力（章ごと、最小）は次のとおり。
 
 - 章に対応する翻訳済み本文（front matter を除いた本文）
 - 章タイトル（`toc.yaml`）
 
-出力（推奨: 構造化）:
+出力（推奨: 構造化）は次のとおり。
 
 - `ChapterPolish`（JSON）
   - `intro_ja`（短い導入、任意）
@@ -217,7 +218,7 @@ sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book
   - `terms[]`（用語、任意）
   - 章本文の引用が必要な場合は「短い引用」に限る（抜粋しすぎない）。
 
-`ChapterPolish` の例（概念）:
+`ChapterPolish` の例（概念）は次のとおり。
 
 ```json
 {
@@ -228,7 +229,7 @@ sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book
 }
 ```
 
-適用（LLMなし）:
+適用（LLMなし）は次のとおり。
 
 - `book/src/chapters/chXX.md` に、上記 JSON を使って短い導入/要点を挿入する。
 - 章本文（翻訳済み）は変更しない。
@@ -236,7 +237,7 @@ sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book
 
 ### Flow H: 検証（LLMなし）
 
-最低限の検証:
+最低限の検証は次のとおり。
 
 - `toc.yaml` が page id を重複なく全件カバーしていること
 - 章本文が翻訳済みであること（英語が過度に残っていないこと）
