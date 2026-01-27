@@ -7,7 +7,15 @@ use std::thread;
 use std::time::Duration;
 
 use predicates::prelude::*;
+use sha2::Digest as _;
+use sha2::Sha256;
 use sitebookify::formats::{CrawlRecord, ManifestRecord, Toc};
+
+static LOGO_PNG: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0,
+    0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 23, 0, 2, 3, 1, 128,
+    110, 220, 25, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
 fn spawn_docs_server() -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
     let server = tiny_http::Server::http("127.0.0.1:0").expect("start tiny_http server");
@@ -39,10 +47,16 @@ fn spawn_docs_server() -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
 
             let path = url.split('?').next().unwrap_or(&url);
 
+            enum Body {
+                Text(&'static str),
+                Bytes(&'static [u8]),
+            }
+
             let (status, body) = match path {
                 "/docs" | "/docs/" => (
                     200,
-                    r#"<!doctype html>
+                    Body::Text(
+                        r#"<!doctype html>
 <html>
   <head><title>Docs Root</title></head>
   <body>
@@ -54,10 +68,12 @@ fn spawn_docs_server() -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
   </body>
 </html>
 "#,
+                    ),
                 ),
                 "/docs/intro" => (
                     200,
-                    r#"<!doctype html>
+                    Body::Text(
+                        r#"<!doctype html>
 <html>
   <head><title>Intro</title></head>
   <body>
@@ -67,22 +83,33 @@ fn spawn_docs_server() -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
   </body>
 </html>
 "#,
+                    ),
                 ),
                 "/docs/advanced" => (
                     200,
-                    r#"<!doctype html>
+                    Body::Text(
+                        r#"<!doctype html>
 <html>
   <head><title>Advanced</title></head>
   <body>
     <h1>Advanced</h1>
     <p>Advanced content.</p>
+    <h2>キーボードショートカット</h2>
+    <p>章間の移動には ← または → を押します</p>
+    <p>本の検索には S または / を押します</p>
+    <p>? を押すとこのヘルプを表示します</p>
+    <p>Esc を押すとこのヘルプを非表示にします</p>
+    <p><img src="/docs/assets/logo.png" alt="Logo" /></p>
   </body>
 </html>
 "#,
+                    ),
                 ),
+                "/docs/assets/logo.png" => (200, Body::Bytes(LOGO_PNG)),
                 "/outside" => (
                     200,
-                    r#"<!doctype html>
+                    Body::Text(
+                        r#"<!doctype html>
 <html>
   <head><title>Outside</title></head>
   <body>
@@ -91,15 +118,25 @@ fn spawn_docs_server() -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
   </body>
 </html>
 "#,
+                    ),
                 ),
-                _ => (404, "not found"),
+                _ => (404, Body::Text("not found")),
             };
 
-            let mut response = tiny_http::Response::from_string(body).with_status_code(status);
+            let mut response = match body {
+                Body::Text(text) => tiny_http::Response::from_string(text),
+                Body::Bytes(bytes) => tiny_http::Response::from_data(bytes.to_vec()),
+            }
+            .with_status_code(status);
+
             if status == 200 {
+                let content_type_value = match body {
+                    Body::Text(_) => "text/html; charset=utf-8",
+                    Body::Bytes(_) => "image/png",
+                };
                 let header = tiny_http::Header::from_bytes(
                     &b"Content-Type"[..],
-                    &b"text/html; charset=utf-8"[..],
+                    content_type_value.as_bytes(),
                 )
                 .expect("build header");
                 response = response.with_header(header);
@@ -151,6 +188,14 @@ fn count_files_with_extension(dir: &Path, extension: &str) -> anyhow::Result<usi
 
 fn pandoc_available() -> bool {
     Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn weasyprint_available() -> bool {
+    Command::new("weasyprint")
         .arg("--version")
         .output()
         .map(|output| output.status.success())
@@ -291,8 +336,60 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
         assert!(seen_ids.insert(chapter.sources[0].clone()));
     }
 
-    let manifest_ids: HashSet<String> = manifest_records.into_iter().map(|r| r.id).collect();
+    let manifest_ids: HashSet<String> = manifest_records.iter().map(|r| r.id.clone()).collect();
     assert_eq!(seen_ids, manifest_ids);
+
+    // A toc refine plan MUST be allowed to omit pages (book curation).
+    let omitted_toc_path = workspace_dir.join("toc.omitted.yaml");
+    let keep_id = manifest_sorted[0].id.clone();
+    let plan_json = format!(
+        r#"{{"book_title":"Omitted Book","chapters":[{{"title":"Only One","sources":["{keep_id}"]}}]}}"#
+    );
+    let script = format!("cat >/dev/null; cat <<'JSON'\n{plan_json}\nJSON\n");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "toc",
+        "refine",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--out",
+        omitted_toc_path.to_str().unwrap(),
+        "--engine",
+        "command",
+        "--command",
+        "sh",
+        "--",
+        "-c",
+        &script,
+    ])
+    .assert()
+    .success();
+
+    let omitted_yaml = fs::read_to_string(&omitted_toc_path)?;
+    let omitted: Toc = serde_yaml::from_str(&omitted_yaml).expect("parse omitted toc yaml");
+    assert_eq!(omitted.parts.len(), 1, "expected exactly one part");
+    assert_eq!(
+        omitted.parts[0].chapters.len(),
+        1,
+        "expected exactly one chapter"
+    );
+    assert_eq!(
+        omitted.parts[0].chapters[0].sources,
+        vec![keep_id],
+        "expected omitted toc to keep only one page"
+    );
+
+    let advanced_record = manifest_sorted
+        .iter()
+        .find(|r| r.path == "/docs/advanced")
+        .expect("expected /docs/advanced in manifest");
+    let advanced_id = advanced_record.id.clone();
+    let expected_image_url = format!("{base_url}/docs/assets/logo.png");
+    let mut hasher = Sha256::new();
+    hasher.update(expected_image_url.as_bytes());
+    let expected_image_hash = hex::encode(hasher.finalize());
+    let expected_asset_file = format!("img_{expected_image_hash}.png");
+    let expected_chapter_image_ref = format!("../assets/{expected_asset_file}");
 
     let openai_refined_toc_path = workspace_dir.join("toc.openai.yaml");
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
@@ -315,12 +412,95 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let ch01 = fs::read_to_string(ch01_path)?;
     assert!(ch01.contains("## Sources"));
     assert!(ch01.contains(&format!("{base_url}/docs")));
+    assert!(!ch01.contains("TODO"));
+    assert!(!ch01.contains("キーボードショートカット"));
+    assert!(!ch01.contains("章間の移動には"));
+    assert!(ch01.contains(&format!("<a id=\"{advanced_id}\"></a>")));
+    assert!(ch01.contains(&format!("](#{advanced_id})")));
+    assert!(ch01.contains(&expected_chapter_image_ref));
+    assert!(!ch01.contains(&expected_image_url));
+
+    let book_asset_path = book_dir
+        .join("src")
+        .join("assets")
+        .join(&expected_asset_file);
+    assert!(book_asset_path.exists(), "expected asset to exist");
+    assert!(
+        fs::metadata(&book_asset_path)?.len() > 0,
+        "expected asset to be non-empty"
+    );
+
+    let refined_book_dir = workspace_dir.join("book_refined");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "book",
+        "init",
+        "--out",
+        refined_book_dir.to_str().unwrap(),
+        "--title",
+        "Test Book",
+    ])
+    .assert()
+    .success();
+
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "book",
+        "render",
+        "--toc",
+        refined_toc_path.to_str().unwrap(),
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--out",
+        refined_book_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+
+    let refined_ch01_path = refined_book_dir
+        .join("src")
+        .join("chapters")
+        .join("ch01.md");
+    let refined_ch01 = fs::read_to_string(&refined_ch01_path)?;
+    assert!(
+        refined_ch01.contains(&format!("](ch02.md#{advanced_id})")),
+        "expected cross-chapter link to be rewritten"
+    );
+
+    let refined_bundle_path = workspace_dir.join("book.refined.md");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "book",
+        "bundle",
+        "--book",
+        refined_book_dir.to_str().unwrap(),
+        "--out",
+        refined_bundle_path.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+
+    let refined_bundle = fs::read_to_string(&refined_bundle_path)?;
+    assert!(refined_bundle.contains(&format!("](#{advanced_id})")));
+    assert!(!refined_bundle.contains(&format!("](ch02.md#{advanced_id})")));
 
     let bundle_md_path = workspace_dir.join("book.md");
     assert!(bundle_md_path.exists(), "expected book.md to exist");
     let bundle_md = fs::read_to_string(&bundle_md_path)?;
     assert!(bundle_md.contains("# Test Book"));
     assert!(bundle_md.contains("## Sources"));
+    assert!(bundle_md.contains(&format!("assets/{expected_asset_file}")));
+    assert!(!bundle_md.contains("../assets/"));
+
+    let bundled_asset_path = workspace_dir.join("assets").join(&expected_asset_file);
+    assert!(
+        bundled_asset_path.exists(),
+        "expected bundled asset to exist"
+    );
+    assert!(
+        fs::metadata(&bundled_asset_path)?.len() > 0,
+        "expected bundled asset to be non-empty"
+    );
 
     let built_translated_md_path = workspace_dir.join("book.ja.md");
     assert!(
@@ -437,6 +617,65 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
             "expected epub to be non-empty"
         );
     }
+
+    if pandoc_available() && weasyprint_available() {
+        let pdf_path = workspace_dir.join("book.pdf");
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+        cmd.args([
+            "export",
+            "--in",
+            translated_md_path.to_str().unwrap(),
+            "--out",
+            pdf_path.to_str().unwrap(),
+            "--format",
+            "pdf",
+            "--title",
+            "Test Book",
+        ])
+        .assert()
+        .success();
+        assert!(pdf_path.exists(), "expected pdf to exist");
+        assert!(
+            fs::metadata(pdf_path)?.len() > 0,
+            "expected pdf to be non-empty"
+        );
+    }
+
+    // build MUST work without an explicit --title (title derived from toc.yaml).
+    let workspace_no_title = temp.path().join("workspace_no_title");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
+    cmd.args([
+        "build",
+        "--url",
+        &start_url,
+        "--out",
+        workspace_no_title.to_str().unwrap(),
+        "--max-pages",
+        "20",
+        "--max-depth",
+        "8",
+        "--concurrency",
+        "2",
+        "--delay-ms",
+        "0",
+    ])
+    .assert()
+    .success();
+
+    let toc_no_title_path = workspace_no_title.join("toc.yaml");
+    let toc_no_title_yaml = fs::read_to_string(&toc_no_title_path)?;
+    let toc_no_title: Toc =
+        serde_yaml::from_str(&toc_no_title_yaml).expect("parse toc yaml (no title)");
+    assert!(
+        !toc_no_title.book_title.trim().is_empty(),
+        "expected derived book_title to be non-empty"
+    );
+    let bundle_no_title_path = workspace_no_title.join("book.md");
+    let bundle_no_title = fs::read_to_string(&bundle_no_title_path)?;
+    assert!(
+        bundle_no_title.contains(&format!("# {}", toc_no_title.book_title)),
+        "expected bundle to include derived book title"
+    );
 
     // Snapshot outputs MUST NOT be overwritten.
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");

@@ -27,20 +27,24 @@ The typical workflow is:
 2. `extract` (Extracted Pages snapshot)
 3. `manifest` (JSONL index)
 4. `toc init` (YAML chapter layout)
-5. `book init` (mdBook skeleton)
-6. `book render` (generate `book/src/`)
+5. `toc refine` (optional: reorder/omit pages + title via LLM)
+6. `book init` (mdBook skeleton)
+7. `book render` (generate `book/src/`)
+8. `book bundle` (single Markdown file + assets)
+9. `llm translate` (optional: translated Markdown)
+10. `export` (optional: epub/pdf via `pandoc`)
 
 ## Commands
 
 ### `build`
 
-Run the full pipeline (crawl → extract → manifest → toc init → book init → book render) in one command.
+Run the full pipeline (crawl → extract → manifest → toc (init/refine) → book (init/render) → bundle → (optional) translate) in one command.
 
 ```sh
 sitebookify build \
   --url https://example.com/docs/ \
-  --out workspace \
-  --title "Example Docs Textbook"
+  --out workspace
+# --title is optional (derived from toc.yaml / LLM)
 ```
 
 Workspace layout (MVP):
@@ -52,12 +56,17 @@ Workspace layout (MVP):
   manifest.jsonl
   toc.yaml
   book/
+  assets/
+  book.md
+  book.<LANG>.md
 ```
 
 Notes (MVP):
 
 - Workspaces are write-once: if `--out` already exists, `build` fails.
 - Crawl flags (`--max-pages`, `--max-depth`, `--concurrency`, `--delay-ms`) are supported.
+- If `--toc-refine` is set, the LLM may reorder/omit pages and propose a better title.
+- If `--translate-to <LANG>` is set, `build` writes `book.<LANG>.md` (requires `OPENAI_API_KEY` when using `--translate-engine openai`).
 
 ### `crawl`
 

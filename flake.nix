@@ -56,7 +56,9 @@
               just
               mermaid-cli
               nodejs_20
+              noto-fonts-cjk-sans
               pandoc
+              python312Packages.weasyprint
               rust-analyzer
               rustLibSrc
               rustc

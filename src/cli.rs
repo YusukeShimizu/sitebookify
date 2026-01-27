@@ -65,9 +65,9 @@ pub struct BuildArgs {
     #[arg(long)]
     pub out: String,
 
-    /// Book title (written to `book/book.toml`).
+    /// Book title (default: derived from TOC / LLM).
     #[arg(long)]
-    pub title: String,
+    pub title: Option<String>,
 
     /// Maximum pages to retrieve.
     #[arg(long, default_value_t = 200)]
@@ -122,7 +122,7 @@ pub struct BuildArgs {
     pub translate_command_args: Vec<String>,
 
     /// OpenAI model (used when translate-engine=openai).
-    #[arg(long, default_value = "gpt-4.1")]
+    #[arg(long, default_value = "gpt-5-mini")]
     pub openai_model: String,
 
     /// OpenAI API base URL (used when translate-engine=openai).
@@ -133,9 +133,17 @@ pub struct BuildArgs {
     #[arg(long, default_value_t = 12_000)]
     pub openai_max_chars: usize,
 
-    /// OpenAI temperature (used when translate-engine=openai).
+    /// OpenAI temperature (used when translate-engine=openai; ignored for `gpt-5*` models).
     #[arg(long, default_value_t = 0.0)]
     pub openai_temperature: f32,
+
+    /// Maximum concurrent OpenAI requests (used when translate-engine=openai).
+    #[arg(long, default_value_t = 1)]
+    pub openai_concurrency: usize,
+
+    /// Retries per OpenAI chunk when placeholder tokens are modified (used when translate-engine=openai).
+    #[arg(long, default_value_t = 1)]
+    pub openai_retries: usize,
 }
 
 #[derive(Debug, Args)]
@@ -208,14 +216,14 @@ pub struct TocRefineArgs {
     pub command_args: Vec<String>,
 
     /// OpenAI model (used when engine=openai).
-    #[arg(long, default_value = "gpt-4.1")]
+    #[arg(long, default_value = "gpt-5-mini")]
     pub openai_model: String,
 
     /// OpenAI API base URL (used when engine=openai).
     #[arg(long, default_value = "https://api.openai.com/v1")]
     pub openai_base_url: String,
 
-    /// OpenAI temperature (used when engine=openai).
+    /// OpenAI temperature (used when engine=openai; ignored for `gpt-5*` models).
     #[arg(long, default_value_t = 0.0)]
     pub openai_temperature: f32,
 
@@ -301,7 +309,7 @@ pub struct ExportArgs {
     #[arg(long, default_value = "pandoc")]
     pub pandoc: String,
 
-    /// PDF engine for pandoc (e.g. `tectonic`, `xelatex`).
+    /// PDF engine for pandoc (e.g. `weasyprint`, `tectonic`, `xelatex`).
     #[arg(long)]
     pub pdf_engine: Option<String>,
 
@@ -354,7 +362,7 @@ pub struct LlmTranslateArgs {
     pub command_args: Vec<String>,
 
     /// OpenAI model (used when engine=openai).
-    #[arg(long, default_value = "gpt-4.1")]
+    #[arg(long, default_value = "gpt-5-mini")]
     pub openai_model: String,
 
     /// OpenAI API base URL (used when engine=openai).
@@ -365,9 +373,17 @@ pub struct LlmTranslateArgs {
     #[arg(long, default_value_t = 12_000)]
     pub openai_max_chars: usize,
 
-    /// OpenAI temperature (used when engine=openai).
+    /// OpenAI temperature (used when engine=openai; ignored for `gpt-5*` models).
     #[arg(long, default_value_t = 0.0)]
     pub openai_temperature: f32,
+
+    /// Maximum concurrent OpenAI requests (used when engine=openai).
+    #[arg(long, default_value_t = 1)]
+    pub openai_concurrency: usize,
+
+    /// Retries per OpenAI chunk when placeholder tokens are modified (used when engine=openai).
+    #[arg(long, default_value_t = 1)]
+    pub openai_retries: usize,
 
     /// Overwrite output file if it already exists.
     #[arg(long, default_value_t = false)]

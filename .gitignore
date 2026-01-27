@@ -28,7 +28,7 @@ AGENTS.md
 /book/
 /manifest.jsonl
 /toc.yaml
-/workspace/
+/workspace*/
 
 # Node / Mintlify
 node_modules/

@@ -14,14 +14,21 @@ pub async fn responses_text(
     input: &str,
     temperature: f32,
 ) -> anyhow::Result<String> {
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "instructions": instructions,
         "input": input,
         "text": { "format": { "type": "text" } },
-        "temperature": temperature,
         "store": false,
     });
+
+    // NOTE: Some GPT-5 models reject sampling params like `temperature`.
+    // Keep compatibility by omitting it for the GPT-5 family by default.
+    if !model.starts_with("gpt-5")
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert("temperature".to_owned(), serde_json::json!(temperature));
+    }
 
     let response = client
         .post(endpoint)

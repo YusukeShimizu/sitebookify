@@ -84,6 +84,7 @@ actions
     extract [ raw: string ; out: string ]
         => [ exit_code: 0 ]
         write `extracted/pages/*.md`
+        strip known UI boilerplate sections (e.g. mdBook keyboard shortcuts help)
         do not overwrite existing snapshot files
     manifest [ extracted: string ; out: string ]
         => [ exit_code: 0 ]
@@ -103,6 +104,8 @@ actions
     ]
         => [ exit_code: 0 ]
         write refined `toc.yaml`
+        may omit manifest pages that are not suitable for a book
+        may propose a better `book_title`
         when engine is "openai", require env `OPENAI_API_KEY` and call OpenAI Responses API
         when engine is "command", invoke an external command as a filter (stdin -> stdout)
         do not overwrite existing output files
@@ -113,25 +116,41 @@ actions
         => [ exit_code: 0 ]
         write `book/src/SUMMARY.md` and `book/src/chapters/*.md`
         ensure every chapter includes `## Sources`
+        do not emit placeholder TODO sections
+        preserve internal links and images where possible
+        when a link target matches a manifest page URL, rewrite to an internal anchor link
+        download referenced images into `book/src/assets/*` and rewrite image destinations to local relative paths
+        include stable anchors (e.g. `<a id="p_..."></a>`) for each embedded source page
     book_bundle [ book: string ; out: string ]
         => [ exit_code: 0 ]
         read `book/src/SUMMARY.md` and `book/src/**/*.md`
         write a single Markdown file that concatenates chapters in SUMMARY order
+        rewrite internal chapter links to anchors where possible
+        when `book/src/assets` exists, copy it to `assets/` next to `out` (without overwriting existing files)
+        rewrite image paths from `../assets/*` to `assets/*`
         do not overwrite existing output files
     llm_translate [ input: string ; out: string ; to: string ; engine: string ]
         => [ exit_code: 0 ]
         write a translated Markdown file
         when engine is "openai", require env `OPENAI_API_KEY` and call OpenAI Responses API
+        when engine is "openai", chunk the input and call OpenAI concurrently
+        emit translation progress logs (done/total chunks)
+        when a chunk translation fails, keep the original chunk and continue
+        when placeholder token verification fails, patch the output with original placeholders and continue
+        when placeholder token patching fails, restore the affected chunks to the original input and continue
+        when placeholder restoration fails, output the original input
         when engine is "command", invoke an external command as a filter (stdin -> stdout)
         do not overwrite existing output files
     export [ input: string ; out: string ; format: string ]
         => [ exit_code: 0 ]
         write `out` converted from `input` (e.g. epub/pdf via external tools)
+        when format is "pdf", prefer pandoc `--pdf-engine=weasyprint` when available, and fall back to `tectonic`
+        when `pandoc` is not available, and `nix` + `flake.nix` are available, invoke `pandoc` via `nix develop -c pandoc`
         do not overwrite existing output files
     build [
         url: string
         out: string
-        title: string
+        title: string (optional)
         max_pages: number
         max_depth: number
         concurrency: number
@@ -144,6 +163,7 @@ actions
         => [ exit_code: 0 ]
         write `<OUT>/raw/**`, `<OUT>/extracted/**`, `<OUT>/manifest.jsonl`, `<OUT>/toc.yaml`, and `<OUT>/book/**`
         write `<OUT>/book.md`
+        write `<OUT>/assets/**`
         when `translate_to` is set, write `<OUT>/book.<LANG>.md`
         do not overwrite existing snapshot files
 operational principle

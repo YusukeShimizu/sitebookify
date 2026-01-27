@@ -6,6 +6,7 @@ use crate::cli::{
     BookBundleArgs, BookInitArgs, BookRenderArgs, BuildArgs, CrawlArgs, ExtractArgs,
     LlmTranslateArgs, ManifestArgs, TocInitArgs, TocRefineArgs,
 };
+use crate::formats::Toc;
 
 pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     let workspace_dir = PathBuf::from(&args.out);
@@ -56,7 +57,7 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
         crate::toc::refine(TocRefineArgs {
             manifest: manifest_path.to_string_lossy().to_string(),
             out: toc_path.to_string_lossy().to_string(),
-            book_title: Some(args.title.clone()),
+            book_title: args.title.clone(),
             engine: args.toc_refine_engine,
             command: args.toc_refine_command.clone(),
             command_args: args.toc_refine_command_args.clone(),
@@ -72,25 +73,29 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
         crate::toc::init(TocInitArgs {
             manifest: manifest_path.to_string_lossy().to_string(),
             out: toc_path.to_string_lossy().to_string(),
-            book_title: Some(args.title.clone()),
+            book_title: args.title.clone(),
         })
         .context("toc init")?;
     }
 
+    let toc_yaml = std::fs::read_to_string(&toc_path)
+        .with_context(|| format!("read toc: {}", toc_path.display()))?;
+    let toc: Toc = serde_yaml::from_str(&toc_yaml).context("parse toc")?;
+
     tracing::info!("build: book init");
     crate::book::init(BookInitArgs {
         out: book_dir.to_string_lossy().to_string(),
-        title: args.title.clone(),
+        title: toc.book_title,
     })
     .context("book init")?;
 
     tracing::info!("build: book render");
-    crate::book::render(BookRenderArgs {
+    let render_args = BookRenderArgs {
         toc: toc_path.to_string_lossy().to_string(),
         manifest: manifest_path.to_string_lossy().to_string(),
         out: book_dir.to_string_lossy().to_string(),
-    })
-    .context("book render")?;
+    };
+    tokio::task::block_in_place(|| crate::book::render(render_args)).context("book render")?;
 
     tracing::info!("build: book bundle");
     crate::book::bundle(BookBundleArgs {
@@ -119,6 +124,8 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
             openai_base_url: args.openai_base_url.clone(),
             openai_max_chars: args.openai_max_chars,
             openai_temperature: args.openai_temperature,
+            openai_concurrency: args.openai_concurrency,
+            openai_retries: args.openai_retries,
             force: false,
         })
         .await

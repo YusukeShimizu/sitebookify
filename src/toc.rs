@@ -230,14 +230,16 @@ async fn refine_via_openai(
         .context("build http client")?;
 
     let instructions = "You are a book editor.\n\
-Task: Given the input JSON (book_title and pages), propose an improved chapter grouping and reading order.\n\
+Task: Given the input JSON (book_title and pages), propose a good book title, an improved chapter grouping, and a reading order suitable for a book.\n\
 \n\
 Rules:\n\
 - Use ONLY the provided page IDs.\n\
-- Every page ID MUST appear exactly once across all chapters.\n\
+- Each page ID MUST appear at most once across all chapters.\n\
+- You MAY omit pages that are not suitable for a book (e.g. nav/search/index/legal/changelog).\n\
 - Each chapter MUST have a non-empty title and at least 1 source page.\n\
+- book_title MUST be a non-empty string.\n\
 - Output MUST be valid JSON and MUST match this schema:\n\
-  {\"book_title\":\"(optional)\",\"chapters\":[{\"title\":\"...\",\"sources\":[\"p_...\"]}]}\n\
+  {\"book_title\":\"...\",\"chapters\":[{\"title\":\"...\",\"sources\":[\"p_...\"]}]}\n\
 - Output JSON ONLY (no markdown fences, no commentary).\n";
 
     let raw = openai::responses_text(
@@ -318,17 +320,25 @@ fn toc_from_plan(
         }
     }
 
+    if seen.is_empty() {
+        anyhow::bail!("toc plan does not include any manifest pages");
+    }
+
     if seen.len() != manifest_ids.len() {
-        let mut missing = Vec::new();
-        for id in manifest_ids {
+        let mut omitted = Vec::new();
+        for id in &manifest_ids {
             if !seen.contains(id) {
-                missing.push(id.to_owned());
+                omitted.push((*id).to_owned());
             }
         }
-        missing.sort();
-        anyhow::bail!(
-            "toc plan does not cover all manifest pages; missing {} page(s)",
-            missing.len()
+        omitted.sort();
+        let sample = omitted.iter().take(10).cloned().collect::<Vec<_>>();
+        tracing::info!(
+            selected_pages = seen.len(),
+            total_pages = manifest_ids.len(),
+            omitted_pages = omitted.len(),
+            omitted_sample = ?sample,
+            "toc plan omitted pages"
         );
     }
 

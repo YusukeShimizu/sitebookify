@@ -53,7 +53,8 @@ async fn try_main() -> anyhow::Result<()> {
         sitebookify::cli::Command::Book {
             command: sitebookify::cli::BookCommand::Render(args),
         } => {
-            sitebookify::book::render(args).context("book render")?;
+            tokio::task::block_in_place(|| sitebookify::book::render(args))
+                .context("book render")?;
         }
         sitebookify::cli::Command::Book {
             command: sitebookify::cli::BookCommand::Bundle(args),
