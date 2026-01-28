@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 
 use crate::cli::{
-    BookBundleArgs, BookInitArgs, BookRenderArgs, BuildArgs, CrawlArgs, ExtractArgs,
-    LlmRewritePagesArgs, ManifestArgs, TocInitArgs, TocRefineArgs,
+    BookBundleArgs, BookInitArgs, BookRenderArgs, BuildArgs, CrawlArgs, ExtractArgs, ManifestArgs,
+    TocCreateArgs,
 };
 use crate::formats::Toc;
 
@@ -52,87 +52,22 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     })
     .context("manifest")?;
 
-    if args.toc_refine {
-        tracing::info!("build: toc refine");
-        crate::toc::refine(TocRefineArgs {
-            manifest: manifest_path.to_string_lossy().to_string(),
-            out: toc_path.to_string_lossy().to_string(),
-            book_title: args.title.clone(),
-            engine: args.toc_refine_engine,
-            command: args.toc_refine_command.clone(),
-            command_args: args.toc_refine_command_args.clone(),
-            openai_model: args.openai_model.clone(),
-            openai_base_url: args.openai_base_url.clone(),
-            openai_temperature: args.openai_temperature,
-            force: false,
-        })
-        .await
-        .context("toc refine")?;
-    } else {
-        tracing::info!("build: toc init");
-        crate::toc::init(TocInitArgs {
-            manifest: manifest_path.to_string_lossy().to_string(),
-            out: toc_path.to_string_lossy().to_string(),
-            book_title: args.title.clone(),
-        })
-        .context("toc init")?;
-    }
+    tracing::info!("build: toc create");
+    crate::toc::create(TocCreateArgs {
+        manifest: manifest_path.to_string_lossy().to_string(),
+        out: toc_path.to_string_lossy().to_string(),
+        book_title: args.title.clone(),
+        force: false,
+        language: args.language.clone(),
+        tone: args.tone.clone(),
+        engine: args.toc_engine,
+    })
+    .await
+    .context("toc create")?;
 
     let toc_yaml = std::fs::read_to_string(&toc_path)
         .with_context(|| format!("read toc: {}", toc_path.display()))?;
     let toc: Toc = serde_yaml::from_str(&toc_yaml).context("parse toc")?;
-
-    let (manifest_for_book, _manuscript_dir) = if let Some(prompt) = args.rewrite_prompt.clone() {
-        let manuscript_dir = args
-            .rewrite_out
-            .as_deref()
-            .map(PathBuf::from)
-            .map(|p| {
-                if p.is_absolute() {
-                    p
-                } else {
-                    workspace_dir.join(p)
-                }
-            })
-            .unwrap_or_else(|| workspace_dir.join("manuscript"));
-
-        let manuscript_manifest_path = workspace_dir.join("manifest.manuscript.jsonl");
-
-        tracing::info!(
-            out = %manuscript_dir.display(),
-            "build: llm rewrite-pages"
-        );
-        crate::llm::rewrite_pages(LlmRewritePagesArgs {
-            toc: toc_path.to_string_lossy().to_string(),
-            manifest: manifest_path.to_string_lossy().to_string(),
-            out: manuscript_dir.to_string_lossy().to_string(),
-            prompt,
-            engine: args.rewrite_engine,
-            command: args.rewrite_command.clone(),
-            command_args: args.rewrite_command_args.clone(),
-            openai_model: args.openai_model.clone(),
-            openai_base_url: args.openai_base_url.clone(),
-            openai_max_chars: args.openai_max_chars,
-            openai_temperature: args.openai_temperature,
-            openai_concurrency: args.openai_concurrency,
-            openai_retries: args.openai_retries,
-            allow_missing_tokens: args.rewrite_allow_missing_tokens,
-            force: false,
-        })
-        .await
-        .context("llm rewrite-pages")?;
-
-        tracing::info!("build: manifest (manuscript)");
-        crate::manifest::run(ManifestArgs {
-            extracted: manuscript_dir.to_string_lossy().to_string(),
-            out: manuscript_manifest_path.to_string_lossy().to_string(),
-        })
-        .context("manifest (manuscript)")?;
-
-        (manuscript_manifest_path, Some(manuscript_dir))
-    } else {
-        (manifest_path.clone(), None)
-    };
 
     tracing::info!("build: book init");
     crate::book::init(BookInitArgs {
@@ -144,8 +79,11 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     tracing::info!("build: book render");
     let render_args = BookRenderArgs {
         toc: toc_path.to_string_lossy().to_string(),
-        manifest: manifest_for_book.to_string_lossy().to_string(),
+        manifest: manifest_path.to_string_lossy().to_string(),
         out: book_dir.to_string_lossy().to_string(),
+        language: args.language.clone(),
+        tone: args.tone.clone(),
+        engine: args.render_engine,
     };
     tokio::task::block_in_place(|| crate::book::render(render_args)).context("book render")?;
 

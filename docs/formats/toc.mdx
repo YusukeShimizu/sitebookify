@@ -3,8 +3,8 @@ title: TOC Format
 description: TOC schema and intent.
 ---
 
-The TOC (table of contents) is the output of `sitebookify toc init`.
-It defines how Extracted Pages are grouped into chapters when rendering a book.
+The TOC (table of contents) is the output of `sitebookify toc create`.
+It defines how Extracted Pages are grouped into chapters and sections when rendering a book.
 
 ## Schema (MVP)
 
@@ -17,8 +17,13 @@ parts:
     chapters:
       - id: "ch01"
         title: "Docs"
-        sources:
-          - "p_<sha256_hex>"
+        intent: "Explain the overall structure and key concepts."
+        reader_gains:
+          - "You can navigate the docs as a coherent book."
+        sections:
+          - title: "Overview"
+            sources:
+              - "p_<sha256_hex>"
 ```
 
 Fields:
@@ -29,7 +34,11 @@ Fields:
   - `chapters` (list):
     - `id` (string): chapter id (used as the output filename).
     - `title` (string): chapter title.
-    - `sources` (list[string]): ordered list of Manifest IDs.
+    - `intent` (string): chapter intent ("狙い").
+    - `reader_gains` (list[string]): what the reader gains ("読者が得るもの").
+    - `sections` (list):
+      - `title` (string): section title.
+      - `sources` (list[string]): ordered list of Manifest IDs used as sources for this section.
 
 ## Proto schema
 

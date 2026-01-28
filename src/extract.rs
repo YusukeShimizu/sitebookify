@@ -187,6 +187,32 @@ fn strip_mdbook_keyboard_shortcuts_help(markdown: &str) -> String {
             }
         }
 
+        let lower = title.to_ascii_lowercase();
+        if lower.starts_with("press") {
+            let lookahead_end = usize::min(i + 20, lines.len());
+            let score = mdbook_keyboard_shortcuts_score(&lines[i..lookahead_end]);
+            if score >= 3 {
+                let mut j = i;
+                while j < lines.len() {
+                    let next = lines[j];
+                    if parse_heading_at(&lines, j).is_some() {
+                        break;
+                    }
+                    let next_trimmed = next.trim();
+                    if next_trimmed.is_empty()
+                        || next_trimmed.to_ascii_lowercase().starts_with("press")
+                        || mdbook_keyboard_shortcuts_score(&[next]) > 0
+                    {
+                        j += 1;
+                        continue;
+                    }
+                    break;
+                }
+                i = j;
+                continue;
+            }
+        }
+
         out.push(line);
         i += 1;
     }
@@ -290,7 +316,16 @@ fn mdbook_keyboard_shortcuts_score(lines: &[&str]) -> usize {
         }
 
         let lower = t.to_ascii_lowercase();
+        if (t.contains('←') || t.contains('→')) && lower.contains("chapter") {
+            score += 1;
+        }
+        if lower.contains("navigate between chapters") {
+            score += 1;
+        }
         if lower.contains("search the book") {
+            score += 1;
+        }
+        if lower.contains("search in the book") {
             score += 1;
         }
         if lower.contains("this help") && lower.contains("press") {
@@ -386,6 +421,35 @@ Keep.
         let out = strip_known_boilerplate_sections(input);
         assert!(!out.contains("キーボードショートカット"));
         assert!(!out.contains("章間の移動には"));
+        assert!(out.contains("## Next"));
+        assert!(out.contains("Keep."));
+    }
+
+    #[test]
+    fn strip_mdbook_keyboard_shortcuts_help_english_without_heading() {
+        let input = "\
+# Title
+
+### Manual Coin Selection - LWK Documentation
+
+Press ← or → to navigate between chapters
+
+Press S or / to search in the book
+
+Press ? to show this help
+
+Press Esc to hide this help
+
+## Next
+Keep.
+";
+
+        let out = strip_known_boilerplate_sections(input);
+        assert!(!out.contains("navigate between chapters"));
+        assert!(!out.contains("search in the book"));
+        assert!(!out.contains("show this help"));
+        assert!(!out.contains("hide this help"));
+        assert!(out.contains("### Manual Coin Selection - LWK Documentation"));
         assert!(out.contains("## Next"));
         assert!(out.contains("Keep."));
     }

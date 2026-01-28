@@ -3,12 +3,12 @@
 pub mod book;
 pub mod build;
 pub mod cli;
+pub mod codex;
 pub mod crawl;
 pub mod extract;
 pub mod formats;
-pub mod llm;
 pub mod logging;
 pub mod manifest;
-mod openai;
 pub mod raw_store;
+pub mod rewrite;
 pub mod toc;

@@ -61,28 +61,21 @@ sitebookify build --url https://example.com/docs/ --out workspace
 # sitebookify build --url https://example.com/docs/ --out workspace --title "Example Docs Textbook"
 ```
 
-本向けの書き換えまで含める場合は、`--rewrite-prompt` を指定する。
+TOC 作成と本文の書き換えは Codex CLI を利用する。
+事前に Codex CLI をインストールし、ログインしておく。
 
 ```sh
-sitebookify build \
-  --url https://example.com/docs/ \
-  --out workspace \
-  --rewrite-prompt "日本語で簡潔にまとめて" \
-  --rewrite-engine openai \
-  --openai-model gpt-5-mini
+# 言語とトーンを指定できる（ニュアンス可変）
+sitebookify build --url https://example.com/docs/ --out workspace --language 日本語 --tone 丁寧
 ```
 
-章立て（chapter と順序）も LLM で自動調整したい場合は `--toc-refine` を指定する。
+Codex CLI のバイナリやモデルは環境変数で指定できる。
 
 ```sh
-sitebookify build \
-  --url https://example.com/docs/ \
-  --out workspace \
-  --toc-refine \
-  --toc-refine-engine openai \
-  --openai-model gpt-5-mini \
-  --rewrite-prompt "日本語で簡潔にまとめて" \
-  --rewrite-engine openai
+echo 'export SITEBOOKIFY_CODEX_BIN=codex' > .envrc.local
+echo 'export SITEBOOKIFY_CODEX_MODEL=o3' >> .envrc.local
+echo 'export SITEBOOKIFY_CODEX_REASONING_EFFORT=high' >> .envrc.local
+direnv allow
 ```
 
 ワークスペースの中身（MVP）は次の通り。
@@ -91,9 +84,7 @@ sitebookify build \
 workspace/
   raw/
   extracted/
-  manuscript/
   manifest.jsonl
-  manifest.manuscript.jsonl
   toc.yaml
   book/
   assets/
@@ -106,17 +97,16 @@ workspace/
 sitebookify crawl --url https://example.com/docs/ --out raw
 sitebookify extract --raw raw --out extracted
 sitebookify manifest --extracted extracted --out manifest.jsonl
-sitebookify toc init --manifest manifest.jsonl --out toc.yaml
-# 章立てを LLM で調整したい場合（任意）
-sitebookify toc refine --manifest manifest.jsonl --out toc.refined.yaml --book-title "Example Docs Textbook" --engine openai --openai-model gpt-5-mini
-# 本向けに本文を書き換えたい場合（任意）
-sitebookify llm rewrite-pages --toc toc.refined.yaml --manifest manifest.jsonl --out manuscript --prompt "日本語で簡潔にまとめて" --engine openai --openai-model gpt-5-mini
-sitebookify manifest --extracted manuscript --out manifest.manuscript.jsonl
+sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine codex
 sitebookify book init --out book --title "Example Docs Textbook"
-# toc refine / rewrite を実行しない場合は、それぞれ入力を切り替える
-# - toc refine なし: `--toc toc.yaml`
-# - rewrite なし: `--manifest manifest.jsonl`
-sitebookify book render --toc toc.refined.yaml --manifest manifest.manuscript.jsonl --out book
+sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book --language 日本語 --tone 丁寧 --engine codex
+```
+
+Codex を使わずに動作確認したい場合は `noop` を使う。
+
+```sh
+sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine noop
+sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book --language 日本語 --tone 丁寧 --engine noop
 ```
 
 ## 1ファイル出力（Bundle）
@@ -131,38 +121,6 @@ sitebookify book render --toc toc.refined.yaml --manifest manifest.manuscript.js
 
 ```sh
 sitebookify book bundle --book book --out book.md
-```
-
-## 書き換え（LLM）
-
-TOC に採用されたページ（`manifest.jsonl` の `id`）を対象に、Extracted Page を「本向け」の Markdown に書き換える。
-書き換え時は、コードや URL 等の重要な要素を壊さないことを優先する。
-
-- 書き換えコマンドは **stdin で Markdown を受け取り、stdout に Markdown を返す**フィルタとして動作する必要がある。
-- ユーザプロンプトは環境変数 `SITEBOOKIFY_REWRITE_PROMPT` で渡される。
-
-```sh
-# 例: 書き換えエンジンとして外部コマンドを呼び出す
-sitebookify llm rewrite-pages --toc toc.yaml --manifest manifest.jsonl --out manuscript --prompt "日本語で簡潔にまとめて" --engine command --command <REWRITER> -- <ARGS...>
-```
-
-OpenAI API で書き換える場合は `openai` を使う。
-API キーは環境変数 `OPENAI_API_KEY` で渡す。
-
-```sh
-echo 'export OPENAI_API_KEY=...' > .envrc.local
-direnv allow
-sitebookify llm rewrite-pages --toc toc.yaml --manifest manifest.jsonl --out manuscript --prompt "日本語で簡潔にまとめて" --engine openai --openai-model gpt-5-mini
-```
-
-入力が大きい場合は `--openai-max-chars` で分割サイズを調整する。
-書き換えを高速化したい場合は `--openai-concurrency` で並列数を上げる（例: `4`）。
-進捗はログ（stderr）に出力される。
-
-書き換えずに（動作確認用に）入力をそのまま出力したい場合は `noop` を使う。
-
-```sh
-sitebookify llm rewrite-pages --toc toc.yaml --manifest manifest.jsonl --out manuscript --prompt "noop" --engine noop
 ```
 
 ## Logging

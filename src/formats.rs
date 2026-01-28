@@ -47,5 +47,13 @@ pub struct TocPart {
 pub struct TocChapter {
     pub id: String,
     pub title: String,
+    pub intent: String,
+    pub reader_gains: Vec<String>,
+    pub sections: Vec<TocSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TocSection {
+    pub title: String,
     pub sources: Vec<String>,
 }

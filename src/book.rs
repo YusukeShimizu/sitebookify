@@ -4,6 +4,8 @@ use std::fs::OpenOptions;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -11,8 +13,9 @@ use sha2::Digest as _;
 use sha2::Sha256;
 use url::Url;
 
-use crate::cli::{BookBundleArgs, BookInitArgs, BookRenderArgs};
+use crate::cli::{BookBundleArgs, BookInitArgs, BookRenderArgs, LlmEngine};
 use crate::formats::{ManifestRecord, Toc};
+use crate::rewrite;
 
 pub fn init(args: BookInitArgs) -> anyhow::Result<()> {
     let out_dir = PathBuf::from(&args.out);
@@ -86,29 +89,78 @@ pub fn render(args: BookRenderArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&chapters_dir)
         .with_context(|| format!("create chapters dir: {}", chapters_dir.display()))?;
 
-    let mut assets =
-        AssetDownloader::new(assets_dir).context("initialize book asset downloader")?;
+    let assets = AssetDownloader::new(assets_dir).context("initialize book asset downloader")?;
 
     let summary_md = render_summary_md(&toc);
     std::fs::write(out_dir.join("src").join("SUMMARY.md"), summary_md)
         .with_context(|| format!("write SUMMARY.md: {}", out_dir.display()))?;
 
-    for part in toc.parts {
-        for chapter in part.chapters {
-            let chapter_md = render_chapter_md(
-                &chapter.id,
-                &chapter.title,
-                &chapter.sources,
-                &manifest,
-                &url_to_location,
-                &dir_index_ids,
-                &mut assets,
-            )
-            .with_context(|| format!("render chapter: {}", chapter.id))?;
-            std::fs::write(chapters_dir.join(format!("{}.md", chapter.id)), chapter_md)
-                .with_context(|| format!("write chapter: {}", chapter.id))?;
-        }
+    let chapters_in_order = toc
+        .parts
+        .iter()
+        .flat_map(|part| part.chapters.iter())
+        .collect::<Vec<_>>();
+    if chapters_in_order.is_empty() {
+        return Ok(());
     }
+    let worker_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(chapters_in_order.len());
+
+    let engine = args.engine;
+    let language = args.language.as_str();
+    let tone = args.tone.as_str();
+    let manifest = &manifest;
+    let url_to_location = &url_to_location;
+    let dir_index_ids = &dir_index_ids;
+    let assets = &assets;
+
+    let next_idx = Arc::new(AtomicUsize::new(0));
+
+    std::thread::scope(|scope| -> anyhow::Result<()> {
+        let chapters_in_order = &chapters_in_order;
+        let mut handles = Vec::new();
+
+        for _ in 0..worker_count {
+            let chapters_dir = chapters_dir.clone();
+            let next_idx = Arc::clone(&next_idx);
+            handles.push(scope.spawn(move || -> anyhow::Result<()> {
+                loop {
+                    let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                    let Some(chapter) = chapters_in_order.get(idx) else {
+                        break;
+                    };
+
+                    let chapter_id = chapter.id.clone();
+                    let ctx = ChapterRenderContext {
+                        engine,
+                        language,
+                        tone,
+                        manifest,
+                        url_to_location,
+                        dir_index_ids,
+                        assets,
+                    };
+
+                    let chapter_md = render_chapter_md(chapter, &ctx)
+                        .with_context(|| format!("render chapter: {}", chapter_id))?;
+                    std::fs::write(chapters_dir.join(format!("{}.md", chapter_id)), chapter_md)
+                        .with_context(|| format!("write chapter: {}", chapter_id))?;
+                }
+
+                Ok(())
+            }));
+        }
+
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("chapter render thread panicked"))??;
+        }
+
+        Ok(())
+    })?;
 
     Ok(())
 }
@@ -431,9 +483,16 @@ fn rewrite_bundled_link_destination(dest: &str) -> String {
     };
 
     let core = &dest[core_start..core_end];
-    let rewritten = if let Some(stripped) = core.strip_prefix("../assets/") {
+    let (core_inner, brace_wrapped) =
+        if core.starts_with('{') && core.ends_with('}') && core.len() >= 2 {
+            (&core[1..core.len() - 1], true)
+        } else {
+            (core, false)
+        };
+
+    let rewritten_inner = if let Some(stripped) = core_inner.strip_prefix("../assets/") {
         format!("assets/{stripped}")
-    } else if let Some((chapter_ref, fragment)) = core.split_once(".md#")
+    } else if let Some((chapter_ref, fragment)) = core_inner.split_once(".md#")
         && chapter_ref.len() == 4
         && chapter_ref.starts_with("ch")
         && chapter_ref[2..].chars().all(|c| c.is_ascii_digit())
@@ -441,7 +500,13 @@ fn rewrite_bundled_link_destination(dest: &str) -> String {
     {
         format!("#{fragment}")
     } else {
-        core.to_owned()
+        core_inner.to_owned()
+    };
+
+    let rewritten = if brace_wrapped {
+        format!("{{{rewritten_inner}}}")
+    } else {
+        rewritten_inner
     };
 
     if rewritten == core {
@@ -470,52 +535,102 @@ fn render_summary_md(toc: &Toc) -> String {
     md
 }
 
+struct ChapterRenderContext<'a> {
+    engine: LlmEngine,
+    language: &'a str,
+    tone: &'a str,
+    manifest: &'a HashMap<String, ManifestRecord>,
+    url_to_location: &'a HashMap<String, PageLocation>,
+    dir_index_ids: &'a HashSet<String>,
+    assets: &'a AssetDownloader,
+}
+
 fn render_chapter_md(
-    chapter_id: &str,
-    chapter_title: &str,
-    source_ids: &[String],
-    manifest: &HashMap<String, ManifestRecord>,
-    url_to_location: &HashMap<String, PageLocation>,
-    dir_index_ids: &HashSet<String>,
-    assets: &mut AssetDownloader,
+    chapter: &crate::formats::TocChapter,
+    ctx: &ChapterRenderContext<'_>,
 ) -> anyhow::Result<String> {
     let mut md = String::new();
-    md.push_str(&format!("# {chapter_title}\n\n"));
-    md.push_str("## Body\n\n");
-    for source_id in source_ids {
-        let record = manifest
-            .get(source_id)
-            .ok_or_else(|| anyhow::anyhow!("source id not found in manifest: {source_id}"))?;
+    md.push_str(&format!("# {}\n\n", chapter.title));
 
-        let extracted = std::fs::read_to_string(&record.extracted_md).with_context(|| {
-            format!(
-                "read extracted page for {chapter_id}: {}",
-                record.extracted_md
+    let mut chapter_source_ids_in_order = Vec::new();
+    let mut chapter_source_ids_seen = HashSet::new();
+
+    for section in &chapter.sections {
+        if section.title.trim().is_empty() {
+            continue;
+        }
+
+        md.push_str(&format!("## {}\n\n", section.title.trim()));
+
+        // Insert stable anchors for each referenced source page id (for internal link rewriting).
+        for source_id in &section.sources {
+            if chapter_source_ids_seen.insert(source_id.clone()) {
+                chapter_source_ids_in_order.push(source_id.clone());
+            }
+            md.push_str(&format!("<a id=\"{source_id}\"></a>\n"));
+        }
+        md.push('\n');
+
+        let mut source_material = String::new();
+        for source_id in &section.sources {
+            let record = ctx
+                .manifest
+                .get(source_id)
+                .ok_or_else(|| anyhow::anyhow!("source id not found in manifest: {source_id}"))?;
+
+            let extracted = std::fs::read_to_string(&record.extracted_md).with_context(|| {
+                format!(
+                    "read extracted page for {}: {}",
+                    chapter.id, record.extracted_md
+                )
+            })?;
+            let body = strip_front_matter(&extracted).context("strip front matter")?;
+            let body = strip_leading_h1(body);
+            let body = rewrite_markdown_links_and_images(
+                body,
+                &record.url,
+                &chapter.id,
+                ctx.url_to_location,
+                ctx.dir_index_ids.contains(&record.id),
+                ctx.assets,
             )
-        })?;
-        let body = strip_front_matter(&extracted).context("strip front matter")?;
-        let body = strip_leading_h1(body);
-        let body = rewrite_markdown_links_and_images(
-            body,
-            &record.url,
-            chapter_id,
-            url_to_location,
-            dir_index_ids.contains(&record.id),
-            assets,
-        )
-        .with_context(|| format!("rewrite links/images for {}", record.url))?;
+            .with_context(|| format!("rewrite links/images for {}", record.url))?;
 
-        md.push_str(&format!("<a id=\"{}\"></a>\n\n", record.id));
-        md.push_str(&format!("### {}\n\n", record.title));
-        if !body.trim().is_empty() {
-            md.push_str(body.trim());
+            if !source_material.is_empty() && !source_material.ends_with('\n') {
+                source_material.push('\n');
+            }
+            if !source_material.is_empty() {
+                source_material.push('\n');
+            }
+            source_material.push_str(&format!("### {}\n\n", record.title));
+            source_material.push_str(body.trim());
+            source_material.push('\n');
+        }
+
+        let section_body = match ctx.engine {
+            LlmEngine::Noop => source_material.trim_end().to_owned(),
+            LlmEngine::Codex => rewrite::rewrite_section_via_codex(
+                ctx.language,
+                ctx.tone,
+                &chapter.title,
+                &section.title,
+                source_material.trim_end(),
+            )
+            .with_context(|| {
+                format!("codex rewrite section: {} / {}", chapter.id, section.title)
+            })?,
+        };
+
+        if !section_body.trim().is_empty() {
+            md.push_str(section_body.trim_end());
             md.push_str("\n\n");
         }
     }
 
     md.push_str("## Sources\n");
-    for source_id in source_ids {
-        let record = manifest
+    for source_id in &chapter_source_ids_in_order {
+        let record = ctx
+            .manifest
             .get(source_id)
             .ok_or_else(|| anyhow::anyhow!("source id not found in manifest: {source_id}"))?;
         md.push_str(&format!("- {}\n", record.url));
@@ -537,17 +652,19 @@ fn build_url_to_location(
     let mut map = HashMap::new();
     for part in &toc.parts {
         for chapter in &part.chapters {
-            for source_id in &chapter.sources {
-                let Some(record) = manifest.get(source_id) else {
-                    continue;
-                };
-                map.insert(
-                    record.url.clone(),
-                    PageLocation {
-                        chapter_id: chapter.id.clone(),
-                        page_id: record.id.clone(),
-                    },
-                );
+            for section in &chapter.sections {
+                for source_id in &section.sources {
+                    let Some(record) = manifest.get(source_id) else {
+                        continue;
+                    };
+                    map.insert(
+                        record.url.clone(),
+                        PageLocation {
+                            chapter_id: chapter.id.clone(),
+                            page_id: record.id.clone(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -580,7 +697,7 @@ fn compute_dir_index_ids<'a>(
 struct AssetDownloader {
     client: reqwest::blocking::Client,
     assets_dir: PathBuf,
-    cache: HashMap<String, String>,
+    cache: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl AssetDownloader {
@@ -597,14 +714,16 @@ impl AssetDownloader {
         Ok(Self {
             client,
             assets_dir,
-            cache: HashMap::new(),
+            cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    fn download_image(&mut self, url: &Url) -> anyhow::Result<String> {
+    fn download_image(&self, url: &Url) -> anyhow::Result<String> {
         let key = normalize_asset_url_key(url);
-        if let Some(cached) = self.cache.get(&key) {
-            return Ok(cached.clone());
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached) = cache.get(&key)
+        {
+            return Ok(cached.to_owned());
         }
 
         if url.scheme() != "http" && url.scheme() != "https" {
@@ -620,12 +739,16 @@ impl AssetDownloader {
             let local = format!("../assets/{file_name}");
             let dest_path = self.assets_dir.join(&file_name);
             if dest_path.exists() {
-                self.cache.insert(key, local.clone());
+                if let Ok(mut cache) = self.cache.lock() {
+                    cache.insert(key, local.clone());
+                }
                 return Ok(local);
             }
             self.download_to(&key, url, &dest_path)
                 .with_context(|| format!("download image: {url}"))?;
-            self.cache.insert(key, local.clone());
+            if let Ok(mut cache) = self.cache.lock() {
+                cache.insert(key, local.clone());
+            }
             return Ok(local);
         }
 
@@ -651,14 +774,18 @@ impl AssetDownloader {
         let local = format!("../assets/{file_name}");
         let dest_path = self.assets_dir.join(&file_name);
         if dest_path.exists() {
-            self.cache.insert(key, local.clone());
+            if let Ok(mut cache) = self.cache.lock() {
+                cache.insert(key, local.clone());
+            }
             return Ok(local);
         }
 
         let bytes = response.bytes().context("read asset response body")?;
         write_file_if_missing(&dest_path, &bytes)
             .with_context(|| format!("write asset: {}", dest_path.display()))?;
-        self.cache.insert(key, local.clone());
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(key, local.clone());
+        }
         Ok(local)
     }
 
@@ -774,7 +901,7 @@ fn rewrite_markdown_links_and_images(
     chapter_id: &str,
     url_to_location: &HashMap<String, PageLocation>,
     page_is_dir_index: bool,
-    assets: &mut AssetDownloader,
+    assets: &AssetDownloader,
 ) -> anyhow::Result<String> {
     let base_url = Url::parse(page_url).context("parse page url")?;
     let base_for_join = if page_is_dir_index {
@@ -820,7 +947,7 @@ fn rewrite_inline_markdown(
     base_url: &Url,
     current_chapter_id: &str,
     url_to_location: &HashMap<String, PageLocation>,
-    assets: &mut AssetDownloader,
+    assets: &AssetDownloader,
 ) -> anyhow::Result<String> {
     let mut out = String::with_capacity(input.len());
     let mut i = 0usize;
@@ -890,7 +1017,7 @@ fn try_rewrite_link_like(
     base_url: &Url,
     current_chapter_id: &str,
     url_to_location: &HashMap<String, PageLocation>,
-    assets: &mut AssetDownloader,
+    assets: &AssetDownloader,
 ) -> anyhow::Result<Option<(usize, String)>> {
     let mut i = if is_image { 2 } else { 1 };
     let mut bracket_depth = 1u32;
@@ -993,7 +1120,7 @@ fn rewrite_link_destination(
     base_url: &Url,
     current_chapter_id: &str,
     url_to_location: &HashMap<String, PageLocation>,
-    assets: &mut AssetDownloader,
+    assets: &AssetDownloader,
 ) -> anyhow::Result<String> {
     let mut i = 0usize;
     while i < dest.len() {

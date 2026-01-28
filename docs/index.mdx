@@ -14,9 +14,17 @@ One-shot example:
 ```sh
 sitebookify build \
   --url https://example.com/docs/ \
-  --out workspace
+  --out workspace \
+  --language 日本語 \
+  --tone 丁寧
 # --title is optional (derived from toc.yaml / LLM)
 ```
+
+Notes:
+
+- TOC creation and section rewrites use Codex CLI by default.
+  - Configure via `SITEBOOKIFY_CODEX_BIN` (default: `codex`), `SITEBOOKIFY_CODEX_MODEL` (optional), and `SITEBOOKIFY_CODEX_REASONING_EFFORT` (optional).
+- For a deterministic run without an LLM, set `--toc-engine noop --render-engine noop`.
 
 Next: [CLI overview](/cli/overview)
 

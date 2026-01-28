@@ -1,76 +1,16 @@
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{LlmEngine, TocInitArgs, TocRefineArgs};
-use crate::formats::{ManifestRecord, Toc, TocChapter, TocPart};
-use crate::openai;
+use crate::cli::{LlmEngine, TocCreateArgs};
+use crate::codex::{CodexConfig, exec_readonly};
+use crate::formats::{ManifestRecord, Toc, TocChapter, TocPart, TocSection};
 
-pub fn init(args: TocInitArgs) -> anyhow::Result<()> {
-    let manifest_path = PathBuf::from(&args.manifest);
-    let out_path = PathBuf::from(&args.out);
-
-    if out_path.exists() {
-        anyhow::bail!("toc output already exists: {}", out_path.display());
-    }
-
-    let file = OpenOptions::new()
-        .read(true)
-        .open(&manifest_path)
-        .with_context(|| format!("open manifest: {}", manifest_path.display()))?;
-    let reader = BufReader::new(file);
-
-    let mut records = Vec::new();
-    for line in reader.lines() {
-        let line = line.context("read manifest jsonl line")?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let record: ManifestRecord =
-            serde_json::from_str(&line).context("parse manifest record")?;
-        records.push(record);
-    }
-
-    records.sort_by(|a, b| a.path.cmp(&b.path));
-
-    let chapter_title = derive_chapter_title(&records);
-    let book_title = args
-        .book_title
-        .clone()
-        .unwrap_or_else(|| format!("{chapter_title} Textbook"));
-    let sources = records.into_iter().map(|r| r.id).collect::<Vec<_>>();
-
-    let toc = Toc {
-        book_title,
-        parts: vec![TocPart {
-            title: "Part 1".to_owned(),
-            chapters: vec![TocChapter {
-                id: "ch01".to_owned(),
-                title: chapter_title,
-                sources,
-            }],
-        }],
-    };
-
-    let yaml = serde_yaml::to_string(&toc).context("serialize toc")?;
-    let mut out = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&out_path)
-        .with_context(|| format!("create toc: {}", out_path.display()))?;
-    out.write_all(yaml.as_bytes())
-        .with_context(|| format!("write toc: {}", out_path.display()))?;
-    out.flush().context("flush toc")?;
-
-    Ok(())
-}
-
-pub async fn refine(args: TocRefineArgs) -> anyhow::Result<()> {
+pub async fn create(args: TocCreateArgs) -> anyhow::Result<()> {
     let manifest_path = PathBuf::from(&args.manifest);
     let out_path = PathBuf::from(&args.out);
 
@@ -78,44 +18,37 @@ pub async fn refine(args: TocRefineArgs) -> anyhow::Result<()> {
         anyhow::bail!("toc output already exists: {}", out_path.display());
     }
 
-    let file = OpenOptions::new()
-        .read(true)
-        .open(&manifest_path)
-        .with_context(|| format!("open manifest: {}", manifest_path.display()))?;
-    let reader = BufReader::new(file);
-
-    let mut records = Vec::new();
-    for line in reader.lines() {
-        let line = line.context("read manifest jsonl line")?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let record: ManifestRecord =
-            serde_json::from_str(&line).context("parse manifest record")?;
-        records.push(record);
-    }
+    let records = read_manifest_records(&manifest_path).context("read manifest")?;
     if records.is_empty() {
         anyhow::bail!("manifest is empty: {}", manifest_path.display());
     }
 
-    records.sort_by(|a, b| a.path.cmp(&b.path));
-
-    let chapter_title = derive_chapter_title(&records);
-    let book_title = args
-        .book_title
-        .clone()
-        .unwrap_or_else(|| format!("{chapter_title} Textbook"));
-
     let plan = match args.engine {
-        LlmEngine::Noop => refine_noop(&records),
-        LlmEngine::Command => refine_via_command(&args, &book_title, &records)?,
-        LlmEngine::Openai => refine_via_openai(&args, &book_title, &records).await?,
+        LlmEngine::Noop => plan_noop(&args, &records),
+        LlmEngine::Codex => plan_via_codex(&args, &records).await?,
     };
 
-    let toc = toc_from_plan(&plan, &book_title, &records).context("build toc from plan")?;
+    let toc = toc_from_plan(&args, &records, &plan).context("build toc from plan")?;
 
-    let yaml = serde_yaml::to_string(&toc).context("serialize toc")?;
-    let mut out = open_output_file(&out_path, args.force)?;
+    if let Some(parent) = out_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create toc dir: {}", parent.display()))?;
+    }
+
+    let yaml = serde_yaml::to_string(&toc).context("serialize toc yaml")?;
+
+    let mut options = OpenOptions::new();
+    options.write(true);
+    if args.force {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    let mut out = options
+        .open(&out_path)
+        .with_context(|| format!("open toc output: {}", out_path.display()))?;
     out.write_all(yaml.as_bytes())
         .with_context(|| format!("write toc: {}", out_path.display()))?;
     out.flush().context("flush toc")?;
@@ -123,199 +56,192 @@ pub async fn refine(args: TocRefineArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TocPlan {
-    #[serde(default)]
-    book_title: Option<String>,
-    chapters: Vec<TocPlanChapter>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TocPlanChapter {
-    title: String,
-    sources: Vec<String>,
+#[derive(Debug, Clone, Serialize)]
+struct TocCreateInput {
+    language: String,
+    tone: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    book_title_hint: Option<String>,
+    pages: Vec<TocCreatePage>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct TocRefineInput {
-    book_title: String,
-    pages: Vec<TocRefinePage>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct TocRefinePage {
+struct TocCreatePage {
     id: String,
     path: String,
     title: String,
     url: String,
+    extracted_md: String,
 }
 
-fn refine_noop(records: &[ManifestRecord]) -> TocPlan {
+#[derive(Debug, Clone, Deserialize)]
+struct TocPlan {
+    book_title: String,
+    chapters: Vec<TocPlanChapter>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TocPlanChapter {
+    title: String,
+    intent: String,
+    reader_gains: Vec<String>,
+    sections: Vec<TocPlanSection>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TocPlanSection {
+    title: String,
+    sources: Vec<String>,
+}
+
+fn plan_noop(args: &TocCreateArgs, records: &[ManifestRecord]) -> TocPlan {
+    let chapter_title = derive_chapter_title(records);
+    let book_title = args
+        .book_title
+        .clone()
+        .unwrap_or_else(|| format!("{chapter_title} Textbook"));
+
     TocPlan {
-        book_title: None,
-        chapters: records
-            .iter()
-            .map(|r| TocPlanChapter {
-                title: r.title.clone(),
-                sources: vec![r.id.clone()],
-            })
-            .collect(),
+        book_title,
+        chapters: vec![TocPlanChapter {
+            title: chapter_title,
+            intent: "素材を整理し、本として読める順序に並べる。".to_owned(),
+            reader_gains: vec!["原典ページを参照しながら、全体像をたどれる。".to_owned()],
+            sections: records
+                .iter()
+                .map(|r| TocPlanSection {
+                    title: r.title.clone(),
+                    sources: vec![r.id.clone()],
+                })
+                .collect(),
+        }],
     }
 }
 
-fn refine_via_command(
-    args: &TocRefineArgs,
-    book_title: &str,
+async fn plan_via_codex(
+    args: &TocCreateArgs,
     records: &[ManifestRecord],
 ) -> anyhow::Result<TocPlan> {
-    let Some(program) = args.command.as_deref() else {
-        anyhow::bail!("missing --command (required when --engine=command)");
-    };
-
-    let input_json = build_refine_input_json(book_title, records).context("build refine input")?;
-
-    tracing::info!(engine = "command", command = program, "toc refine");
-
-    let mut child = Command::new(program)
-        .args(&args.command_args)
-        .env("SITEBOOKIFY_TOC_REFINE_MANIFEST", &args.manifest)
-        .env("SITEBOOKIFY_TOC_REFINE_OUT", &args.out)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .with_context(|| format!("spawn toc refine command: {program}"))?;
-
-    {
-        let mut stdin = child.stdin.take().context("open toc refine stdin")?;
-        stdin
-            .write_all(input_json.as_bytes())
-            .context("write toc refine stdin")?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .context("wait toc refine process")?;
-    if !output.status.success() {
-        anyhow::bail!("toc refine command failed: {program} ({})", output.status);
-    }
-
-    let stdout =
-        String::from_utf8(output.stdout).context("toc refine stdout is not valid UTF-8")?;
-    let json = extract_json_object(&stdout).context("extract json object from stdout")?;
-    serde_json::from_str(json).context("parse toc plan json")
-}
-
-async fn refine_via_openai(
-    args: &TocRefineArgs,
-    book_title: &str,
-    records: &[ManifestRecord],
-) -> anyhow::Result<TocPlan> {
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY is not set"))?;
-
-    let input_json = build_refine_input_json(book_title, records).context("build refine input")?;
-
-    tracing::info!(
-        engine = "openai",
-        model = %args.openai_model,
-        out = %args.out,
-        "toc refine"
-    );
-
-    let endpoint = openai::responses_endpoint(&args.openai_base_url);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .context("build http client")?;
-
-    let instructions = "You are a book editor.\n\
-Task: Given the input JSON (book_title and pages), propose a good book title, an improved chapter grouping, and a reading order suitable for a book.\n\
-\n\
-Rules:\n\
-- Use ONLY the provided page IDs.\n\
-- Each page ID MUST appear at most once across all chapters.\n\
-- You MAY omit pages that are not suitable for a book (e.g. nav/search/index/legal/changelog).\n\
-- Each chapter MUST have a non-empty title and at least 1 source page.\n\
-- book_title MUST be a non-empty string.\n\
-- Output MUST be valid JSON and MUST match this schema:\n\
-  {\"book_title\":\"...\",\"chapters\":[{\"title\":\"...\",\"sources\":[\"p_...\"]}]}\n\
-- Output JSON ONLY (no markdown fences, no commentary).\n";
-
-    let raw = openai::responses_text(
-        &client,
-        &endpoint,
-        &api_key,
-        &args.openai_model,
-        instructions,
-        &input_json,
-        args.openai_temperature,
-    )
-    .await
-    .context("call OpenAI Responses API")?;
-
-    let json = extract_json_object(&raw).context("extract json object from OpenAI output")?;
-    serde_json::from_str(json).context("parse toc plan json")
-}
-
-fn build_refine_input_json(book_title: &str, records: &[ManifestRecord]) -> anyhow::Result<String> {
     let pages = records
         .iter()
-        .map(|r| TocRefinePage {
+        .map(|r| TocCreatePage {
             id: r.id.clone(),
             path: r.path.clone(),
             title: r.title.clone(),
             url: r.url.clone(),
+            extracted_md: r.extracted_md.clone(),
         })
         .collect::<Vec<_>>();
-    let input = TocRefineInput {
-        book_title: book_title.to_owned(),
+
+    let input = TocCreateInput {
+        language: args.language.clone(),
+        tone: args.tone.clone(),
+        book_title_hint: args.book_title.clone(),
         pages,
     };
-    serde_json::to_string(&input).context("serialize toc refine input json")
-}
+    let input_json = serde_json::to_string_pretty(&input).context("serialize toc input json")?;
 
-fn extract_json_object(text: &str) -> anyhow::Result<&str> {
-    let start = text
-        .find('{')
-        .ok_or_else(|| anyhow::anyhow!("missing `{{`"))?;
-    let end = text
-        .rfind('}')
-        .ok_or_else(|| anyhow::anyhow!("missing `}}`"))?;
-    if end <= start {
-        anyhow::bail!("invalid json object span");
-    }
-    Ok(&text[start..=end])
+    let input_file = tempfile::NamedTempFile::new().context("create toc input temp file")?;
+    std::fs::write(input_file.path(), input_json)
+        .with_context(|| format!("write toc input: {}", input_file.path().display()))?;
+
+    let prompt = format!(
+        "You are a book editor.\n\
+\n\
+Task: Create a Table of Contents (TOC) for a book.\n\
+\n\
+Input:\n\
+- A JSON file exists at: {input_path}\n\
+- It contains `language`, `tone`, optional `book_title_hint`, and `pages`.\n\
+- Each page has an `extracted_md` path to a Markdown snapshot.\n\
+\n\
+You MUST:\n\
+- Read *all* pages' `extracted_md` files and consider the full content (ignore YAML front matter).\n\
+- Make editorial decisions at the TOC level:\n\
+  - Merge overlapping topics.\n\
+  - Consolidate near-duplicate pages.\n\
+  - Omit pages that are not suitable for a book (e.g. nav/search/index/legal/changelog).\n\
+\n\
+Hard rules:\n\
+- Use ONLY the provided page IDs.\n\
+- A page ID MUST appear at most once across all sections (no duplicates).\n\
+- Each chapter MUST have:\n\
+  - `title` (non-empty)\n\
+  - `intent` (non-empty)\n\
+  - `reader_gains` (>= 1 item)\n\
+  - `sections` (>= 1 item)\n\
+- Each section MUST have:\n\
+  - `title` (non-empty)\n\
+  - `sources` (>= 1 page id)\n\
+\n\
+Language & tone:\n\
+- Titles and chapter fields MUST follow `language` and `tone` from the input.\n\
+\n\
+Output:\n\
+- Output ONLY a single JSON object (no markdown fences, no commentary).\n\
+- Schema:\n\
+  {{\"book_title\":\"...\",\"chapters\":[{{\"title\":\"...\",\"intent\":\"...\",\"reader_gains\":[\"...\"],\"sections\":[{{\"title\":\"...\",\"sources\":[\"p_...\"]}}]}}]}}\n",
+        input_path = input_file.path().display(),
+    );
+
+    let config = CodexConfig::from_env();
+    let raw = exec_readonly(&prompt, &config).context("codex exec for toc")?;
+    let json = extract_json_object(&raw).context("extract json object from codex output")?;
+    serde_json::from_str(json).context("parse toc plan json")
 }
 
 fn toc_from_plan(
-    plan: &TocPlan,
-    default_book_title: &str,
+    args: &TocCreateArgs,
     records: &[ManifestRecord],
+    plan: &TocPlan,
 ) -> anyhow::Result<Toc> {
+    if plan.book_title.trim().is_empty() {
+        anyhow::bail!("toc plan book_title is empty");
+    }
     if plan.chapters.is_empty() {
         anyhow::bail!("toc plan has no chapters");
     }
-
-    let mut manifest_ids = std::collections::HashSet::new();
-    for r in records {
-        manifest_ids.insert(r.id.as_str());
+    if plan.chapters.len() > 99 {
+        anyhow::bail!(
+            "too many chapters ({}); chapter ids are limited to ch01..ch99",
+            plan.chapters.len()
+        );
     }
 
-    let mut seen = std::collections::HashSet::new();
+    let manifest_ids = records
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+
     for ch in &plan.chapters {
         if ch.title.trim().is_empty() {
             anyhow::bail!("toc plan chapter title is empty");
         }
-        if ch.sources.is_empty() {
-            anyhow::bail!("toc plan chapter sources is empty");
+        if ch.intent.trim().is_empty() {
+            anyhow::bail!("toc plan chapter intent is empty");
         }
-        for src in &ch.sources {
-            if !manifest_ids.contains(src.as_str()) {
-                anyhow::bail!("unknown source id in toc plan: {src}");
+        if ch.reader_gains.is_empty() || ch.reader_gains.iter().all(|g| g.trim().is_empty()) {
+            anyhow::bail!("toc plan chapter reader_gains is empty");
+        }
+        if ch.sections.is_empty() {
+            anyhow::bail!("toc plan chapter sections is empty");
+        }
+
+        for section in &ch.sections {
+            if section.title.trim().is_empty() {
+                anyhow::bail!("toc plan section title is empty");
             }
-            if !seen.insert(src.as_str()) {
-                anyhow::bail!("duplicate source id in toc plan: {src}");
+            if section.sources.is_empty() {
+                anyhow::bail!("toc plan section sources is empty");
+            }
+            for src in &section.sources {
+                if !manifest_ids.contains(src.as_str()) {
+                    anyhow::bail!("unknown source id in toc plan: {src}");
+                }
+                if !seen.insert(src.as_str()) {
+                    anyhow::bail!("duplicate source id in toc plan: {src}");
+                }
             }
         }
     }
@@ -342,29 +268,37 @@ fn toc_from_plan(
         );
     }
 
-    if plan.chapters.len() > 99 {
-        anyhow::bail!(
-            "too many chapters ({}); chapter ids are limited to ch01..ch99",
-            plan.chapters.len()
-        );
-    }
+    let book_title = args
+        .book_title
+        .clone()
+        .unwrap_or_else(|| plan.book_title.clone());
 
     let chapters = plan
         .chapters
         .iter()
         .enumerate()
-        .map(|(idx, ch)| TocChapter {
-            id: format!("ch{:02}", idx + 1),
-            title: ch.title.clone(),
-            sources: ch.sources.clone(),
+        .map(|(idx, ch)| {
+            let mut gains = ch.reader_gains.clone();
+            gains.retain(|g| !g.trim().is_empty());
+            TocChapter {
+                id: format!("ch{:02}", idx + 1),
+                title: ch.title.clone(),
+                intent: ch.intent.clone(),
+                reader_gains: gains,
+                sections: ch
+                    .sections
+                    .iter()
+                    .map(|s| TocSection {
+                        title: s.title.clone(),
+                        sources: s.sources.clone(),
+                    })
+                    .collect(),
+            }
         })
         .collect::<Vec<_>>();
 
     Ok(Toc {
-        book_title: plan
-            .book_title
-            .clone()
-            .unwrap_or_else(|| default_book_title.to_owned()),
+        book_title,
         parts: vec![TocPart {
             title: "Part 1".to_owned(),
             chapters,
@@ -372,24 +306,38 @@ fn toc_from_plan(
     })
 }
 
-fn open_output_file(path: &PathBuf, force: bool) -> anyhow::Result<std::fs::File> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create toc dir: {}", parent.display()))?;
-    }
+fn read_manifest_records(manifest_path: &PathBuf) -> anyhow::Result<Vec<ManifestRecord>> {
+    let file = OpenOptions::new()
+        .read(true)
+        .open(manifest_path)
+        .with_context(|| format!("open manifest: {}", manifest_path.display()))?;
+    let reader = BufReader::new(file);
 
-    let mut options = OpenOptions::new();
-    options.write(true);
-    if force {
-        options.create(true).truncate(true);
-    } else {
-        options.create_new(true);
+    let mut records = Vec::new();
+    for line in reader.lines() {
+        let line = line.context("read manifest jsonl line")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: ManifestRecord =
+            serde_json::from_str(&line).context("parse manifest record")?;
+        records.push(record);
     }
-    options
-        .open(path)
-        .with_context(|| format!("open toc output: {}", path.display()))
+    records.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(records)
+}
+
+fn extract_json_object(text: &str) -> anyhow::Result<&str> {
+    let start = text
+        .find('{')
+        .ok_or_else(|| anyhow::anyhow!("missing `{{`"))?;
+    let end = text
+        .rfind('}')
+        .ok_or_else(|| anyhow::anyhow!("missing `}}`"))?;
+    if end <= start {
+        anyhow::bail!("invalid json object span");
+    }
+    Ok(&text[start..=end])
 }
 
 fn derive_chapter_title(records: &[ManifestRecord]) -> String {

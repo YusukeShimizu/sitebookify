@@ -58,16 +58,16 @@ concept SitebookifyCLI
 purpose
     ログイン不要の公開サイトをクロールし、Markdown 素材を生成する。
     章立て（TOC）に従って mdBook 形式の教科書 Markdown を出力する。
-    mdBook 出力を 1 つの Markdown に統合し、LLM による「本向けの書き換え」の入力にできるようにする。
-    TOC 作成後に、ユーザプロンプトを加味して各ページ内容を「本として読みやすい体裁（文章中心）」に書き換える。
+    TOC 作成では、章ごとに「狙い」「読者が得るもの」を持たせる。
+    TOC の各節は、材料にする page_id（元ページ）を参照する。
+    TOC 作成時点で「重複ページは片方に寄せる」「似た話題は統合」などの編集判断を行う。
+    本文の書き換えは Codex CLI をエンジンとして行い、ユーザは任意の言語とトーンを指定できる。
     robots.txt は MVP では未対応である。
 state
     binary_name: string
     raw_dir: string
     extracted_dir: string
-    manuscript_dir: string
     manifest_path: string
-    manuscript_manifest_path: string
     toc_path: string
     book_dir: string
     bundle_path: string
@@ -91,30 +91,37 @@ actions
     manifest [ extracted: string ; out: string ]
         => [ exit_code: 0 ]
         write `manifest.jsonl`
-    toc_init [
+    toc_create [
         manifest: string
         out: string
         book_title: string (optional)
+        language: string
+        tone: string
+        engine: string
     ]
         => [ exit_code: 0 ]
         write `toc.yaml`
-    toc_refine [
-        manifest: string
-        out: string
-        book_title: string (optional)
-        engine: string (optional)
-    ]
-        => [ exit_code: 0 ]
-        write refined `toc.yaml`
         may omit manifest pages that are not suitable for a book
         may propose a better `book_title`
-        when engine is "openai", require env `OPENAI_API_KEY` and call OpenAI Responses API
-        when engine is "command", invoke an external command as a filter (stdin -> stdout)
-        do not overwrite existing output files
+        each chapter MUST have `intent` and `reader_gains`
+        each section MUST have `sources` (page ids)
+        when engine is "codex", invoke Codex CLI
+            require env `SITEBOOKIFY_CODEX_BIN` (default: `codex`) to exist in PATH
+            optionally use env `SITEBOOKIFY_CODEX_MODEL`
+            optionally use env `SITEBOOKIFY_CODEX_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
+        when engine is "noop", generate a deterministic TOC without using an LLM
+        do not overwrite existing output files unless `force` is set
     book_init [ out: string ; title: string ]
         => [ exit_code: 0 ]
         write `book/book.toml` and `book/src/*`
-    book_render [ toc: string ; manifest: string ; out: string ]
+    book_render [
+        toc: string
+        manifest: string
+        out: string
+        language: string
+        tone: string
+        engine: string
+    ]
         => [ exit_code: 0 ]
         write `book/src/SUMMARY.md` and `book/src/chapters/*.md`
         ensure every chapter includes `## Sources`
@@ -122,7 +129,16 @@ actions
         preserve internal links and images where possible
         when a link target matches a manifest page URL, rewrite to an internal anchor link
         download referenced images into `book/src/assets/*` and rewrite image destinations to local relative paths
-        include stable anchors (e.g. `<a id="p_..."></a>`) for each embedded source page
+        include stable anchors (e.g. `<a id="p_..."></a>`) for each referenced source page id
+        when engine is "codex", invoke Codex CLI and rewrite each section into book-first prose
+            optionally use env `SITEBOOKIFY_CODEX_MODEL`
+            optionally use env `SITEBOOKIFY_CODEX_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
+            headings are minimal; body is paragraph-first
+            bullet lists are limited to key-point summaries
+            avoid web/article vocabulary (e.g. prefer "本章では" over "この記事では")
+            figures are included only when necessary; explain before placing a figure
+            do not add facts that are not present in the input snapshot
+        when engine is "noop", render sections by concatenating the extracted source material
     book_bundle [ book: string ; out: string ]
         => [ exit_code: 0 ]
         read `book/src/SUMMARY.md` and `book/src/**/*.md`
@@ -130,26 +146,6 @@ actions
         rewrite internal chapter links to anchors where possible
         when `book/src/assets` exists, copy it to `assets/` next to `out` (without overwriting existing files)
         rewrite image paths from `../assets/*` to `assets/*`
-        do not overwrite existing output files
-    llm_rewrite_pages [
-        toc: string
-        manifest: string
-        out: string
-        prompt: string
-        engine: string
-        allow_missing_tokens: boolean (optional)
-    ]
-        => [ exit_code: 0 ]
-        write `<OUT>/pages/*.md` (Markdown with YAML front matter)
-        keep front matter fields (`id`, `url`, `retrieved_at`, `raw_html_path`) from the extracted page
-        may update the `title` for book readability
-        rewrite the body as book-first prose (mostly text; optionally small tables/figures/code)
-        do not add facts that are not present in the input snapshot
-        when the rewrite output is missing placeholder tokens, keep the original section by default
-        when `allow_missing_tokens` is true, keep the rewritten output even if placeholder tokens are missing
-        when engine is "openai", require env `OPENAI_API_KEY` and call OpenAI Responses API
-        when engine is "command", invoke an external command as a filter (stdin -> stdout)
-        when engine is "noop", copy the input body without rewriting
         do not overwrite existing output files
     build [
         url: string
@@ -159,17 +155,15 @@ actions
         max_depth: number
         concurrency: number
         delay_ms: number
-        toc_refine: boolean (optional)
-        toc_refine_engine: string (optional)
-        rewrite_prompt: string (optional)
-        rewrite_engine: string (optional)
-        rewrite_allow_missing_tokens: boolean (optional)
+        language: string
+        tone: string
+        toc_engine: string
+        render_engine: string
     ]
         => [ exit_code: 0 ]
         write `<OUT>/raw/**`, `<OUT>/extracted/**`, `<OUT>/manifest.jsonl`, `<OUT>/toc.yaml`, and `<OUT>/book/**`
         write `<OUT>/book.md`
         write `<OUT>/assets/**`
-        when `rewrite_prompt` is set, write `<OUT>/manuscript/**` and `<OUT>/manifest.manuscript.jsonl`
         do not overwrite existing snapshot files
 operational principle
     after crawl [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/raw" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ]
@@ -178,17 +172,17 @@ operational principle
         => [ exit_code: 0 ]
     then manifest [ extracted: "<TMP>/extracted" ; out: "<TMP>/manifest.jsonl" ]
         => [ exit_code: 0 ]
-    then toc_init [ manifest: "<TMP>/manifest.jsonl" ; out: "<TMP>/toc.yaml" ]
+    then toc_create [ manifest: "<TMP>/manifest.jsonl" ; out: "<TMP>/toc.yaml" ; language: "日本語" ; tone: "丁寧" ; engine: "noop" ]
         => [ exit_code: 0 ]
     then book_init [ out: "<TMP>/book" ; title: "Test Book" ]
         => [ exit_code: 0 ]
-    then book_render [ toc: "<TMP>/toc.yaml" ; manifest: "<TMP>/manifest.jsonl" ; out: "<TMP>/book" ]
+    then book_render [ toc: "<TMP>/toc.yaml" ; manifest: "<TMP>/manifest.jsonl" ; out: "<TMP>/book" ; language: "日本語" ; tone: "丁寧" ; engine: "noop" ]
         => [ exit_code: 0 ]
         `book/src/chapters/ch01.md` contains `## Sources`
     then book_bundle [ book: "<TMP>/book" ; out: "<TMP>/book.md" ]
         => [ exit_code: 0 ]
         `<TMP>/book.md` contains `## Sources`
-    after build [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/workspace" ; title: "Test Book" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ; toc_refine: true ; toc_refine_engine: "noop" ; rewrite_prompt: "日本語で簡潔にまとめて" ; rewrite_engine: "noop" ]
+    after build [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/workspace" ; title: "Test Book" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ; language: "日本語" ; tone: "丁寧" ; toc_engine: "noop" ; render_engine: "noop" ]
         => [ exit_code: 0 ]
         `<TMP>/workspace/book/src/chapters/ch01.md` contains `## Sources`
         `<TMP>/workspace/book.md` contains `## Sources`
@@ -245,7 +239,7 @@ actions
     run [ ]
         => [ ok: boolean ]
         run `cargo test --all`
-        include an end-to-end pipeline test for `build` (internally runs `crawl` → `extract` → `manifest` → `toc init/refine` → `llm rewrite-pages` when enabled → `book render` → `book bundle`)
+        include an end-to-end pipeline test for `build` (internally runs `crawl` → `extract` → `manifest` → `toc create` → `book render` → `book bundle`)
 ```
 
 ```text

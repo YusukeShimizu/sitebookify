@@ -26,23 +26,23 @@ The typical workflow is:
 1. `crawl` (Raw snapshot)
 2. `extract` (Extracted Pages snapshot)
 3. `manifest` (JSONL index)
-4. `toc init` (YAML chapter layout)
-5. `toc refine` (optional: reorder/omit pages + title via LLM)
-6. `llm rewrite-pages` (optional: rewrite pages into book-first prose)
-7. `book init` (mdBook skeleton)
-8. `book render` (generate `book/src/`)
-9. `book bundle` (single Markdown file + assets)
+4. `toc create` (YAML chapter + section layout)
+5. `book init` (mdBook skeleton)
+6. `book render` (rewrite sections + generate `book/src/`)
+7. `book bundle` (single Markdown file + assets)
 
 ## Commands
 
 ### `build`
 
-Run the full pipeline (crawl → extract → manifest → toc (init/refine) → (optional) rewrite-pages → book (init/render) → bundle) in one command.
+Run the full pipeline (crawl → extract → manifest → toc create → book (init/render) → bundle) in one command.
 
 ```sh
 sitebookify build \
   --url https://example.com/docs/ \
-  --out workspace
+  --out workspace \
+  --language 日本語 \
+  --tone 丁寧
 # --title is optional (derived from toc.yaml / LLM)
 ```
 
@@ -52,9 +52,7 @@ Workspace layout (MVP):
 <out>/
   raw/
   extracted/
-  manuscript/               # optional (created when rewrite is enabled)
   manifest.jsonl
-  manifest.manuscript.jsonl # optional (created when rewrite is enabled)
   toc.yaml
   book/
   assets/
@@ -65,9 +63,11 @@ Notes (MVP):
 
 - Workspaces are write-once: if `--out` already exists, `build` fails.
 - Crawl flags (`--max-pages`, `--max-depth`, `--concurrency`, `--delay-ms`) are supported.
-- If `--toc-refine` is set, the LLM may reorder/omit pages and propose a better title.
-- If `--rewrite-prompt <TEXT>` is set, `build` rewrites TOC-selected pages into `manuscript/` and renders the book from it.
-  - `OPENAI_API_KEY` is required when `--rewrite-engine openai` is used.
+- `--toc-engine` and `--render-engine` accept `codex` or `noop` (default: `codex`).
+- Codex settings:
+  - `SITEBOOKIFY_CODEX_BIN` (default: `codex`)
+  - `SITEBOOKIFY_CODEX_MODEL` (optional)
+  - `SITEBOOKIFY_CODEX_REASONING_EFFORT` (optional; e.g. `minimal`, `low`, `medium`, `high`, `xhigh`)
 
 ### `crawl`
 
@@ -115,39 +115,18 @@ Build `manifest.jsonl` from `extracted/pages/*.md`.
 sitebookify manifest --extracted extracted --out manifest.jsonl
 ```
 
-### `toc init`
+### `toc create`
 
-Generate an initial `toc.yaml` from `manifest.jsonl`.
+Generate `toc.yaml` from `manifest.jsonl`.
 
 ```sh
-sitebookify toc init --manifest manifest.jsonl --out toc.yaml
+sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine codex
 ```
 
 If you want to override the generated book title:
 
 ```sh
-sitebookify toc init --manifest manifest.jsonl --out toc.yaml --book-title "My Book"
-```
-
-### `toc refine` (optional)
-
-Refine reading order (and optionally omit pages) via an LLM.
-
-```sh
-sitebookify toc refine --manifest manifest.jsonl --out toc.refined.yaml --engine openai
-```
-
-### `llm rewrite-pages` (optional)
-
-Rewrite TOC-selected pages into book-first prose (mostly text).
-
-```sh
-sitebookify llm rewrite-pages \
-  --toc toc.yaml \
-  --manifest manifest.jsonl \
-  --out manuscript \
-  --prompt "Summarize concisely in Japanese." \
-  --engine openai
+sitebookify toc create --manifest manifest.jsonl --out toc.yaml --book-title "My Book" --language 日本語 --tone 丁寧 --engine codex
 ```
 
 ### `book init`
@@ -163,7 +142,7 @@ sitebookify book init --out book --title "Example Docs Textbook"
 Render chapters based on `toc.yaml` and `manifest.jsonl`.
 
 ```sh
-sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book
+sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book --language 日本語 --tone 丁寧 --engine codex
 ```
 
 Notes (MVP):

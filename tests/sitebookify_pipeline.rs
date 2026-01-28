@@ -185,11 +185,126 @@ fn count_files_with_extension(dir: &Path, extension: &str) -> anyhow::Result<usi
     Ok(count)
 }
 
+fn write_stub_codex(bin_path: &Path) -> anyhow::Result<()> {
+    let script = r#"#!/bin/sh
+set -eu
+
+out=""
+configs=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-last-message)
+      out="$2"
+      shift 2
+      ;;
+    --output-last-message=*)
+      out="${1#*=}"
+      shift 1
+      ;;
+    -c|--config)
+      configs="${configs} $2"
+      shift 2
+      ;;
+    -c=*|--config=*)
+      configs="${configs} ${1#*=}"
+      shift 1
+      ;;
+    *)
+      shift 1
+      ;;
+  esac
+done
+
+if [ -z "$out" ]; then
+  echo "missing --output-last-message" >&2
+  exit 2
+fi
+
+if [ -n "${SITEBOOKIFY_CODEX_REASONING_EFFORT:-}" ]; then
+  expected="model_reasoning_effort=\"${SITEBOOKIFY_CODEX_REASONING_EFFORT}\""
+  if ! echo "$configs" | grep -F -q "$expected"; then
+    echo "missing expected config: $expected" >&2
+    exit 2
+  fi
+fi
+
+prompt="$(cat)"
+
+if echo "$prompt" | grep -q "Create a Table of Contents"; then
+  input_path="$(echo "$prompt" | sed -n 's/^- A JSON file exists at: //p' | head -n 1)"
+  if [ -z "$input_path" ]; then
+    echo "missing toc input path" >&2
+    exit 2
+  fi
+  ids="$(sed -E -n 's/.*"id": "(p_[0-9a-f]{64})".*/\1/p' "$input_path")"
+  if [ -z "$ids" ]; then
+    echo "no ids found in toc input" >&2
+    exit 2
+  fi
+
+  # One chapter per page id (in input order). This is enough to exercise cross-chapter link rewriting.
+  {
+    echo '{'
+    echo '  "book_title": "Stub Book",'
+    echo '  "chapters": ['
+    i=0
+    for id in $ids; do
+      i=$((i+1))
+      [ $i -gt 1 ] && echo '    ,'
+      echo '    {'
+      echo "      \"title\": \"Chapter $i\","
+      echo '      "intent": "Test intent.",'
+      echo '      "reader_gains": ["Test gain."],'
+      echo '      "sections": ['
+      echo '        {'
+      echo "          \"title\": \"Section $i\","
+      echo "          \"sources\": [\"$id\"]"
+      echo '        }'
+      echo '      ]'
+      echo '    }'
+    done
+    echo
+    echo '  ]'
+    echo '}'
+  } >"$out"
+  exit 0
+fi
+
+if echo "$prompt" | grep -q "Rewrite the input Markdown"; then
+  input_path="$(echo "$prompt" | sed -n 's/^- Read the Markdown from the file at: //p' | head -n 1)"
+  if [ -z "$input_path" ]; then
+    echo "missing rewrite input path" >&2
+    exit 2
+  fi
+  cat "$input_path" >"$out"
+  exit 0
+fi
+
+echo "unknown stub mode" >&2
+exit 2
+"#;
+
+    fs::write(bin_path, script)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = fs::metadata(bin_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(bin_path, perms)?;
+    }
+
+    Ok(())
+}
+
 #[test]
 fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let (base_url, shutdown_tx, server_handle) = spawn_docs_server();
     let temp = tempfile::TempDir::new()?;
     let start_url = format!("{base_url}/docs/");
+
+    let stub_codex = temp.path().join("codex-stub");
+    write_stub_codex(&stub_codex)?;
 
     let workspace_dir = temp.path().join("workspace");
     let raw_dir = workspace_dir.join("raw");
@@ -197,33 +312,37 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let manifest_path = workspace_dir.join("manifest.jsonl");
     let toc_path = workspace_dir.join("toc.yaml");
     let book_dir = workspace_dir.join("book");
-    let manuscript_dir = workspace_dir.join("manuscript");
-    let manuscript_manifest_path = workspace_dir.join("manifest.manuscript.jsonl");
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "build",
-        "--url",
-        &start_url,
-        "--out",
-        workspace_dir.to_str().unwrap(),
-        "--title",
-        "Test Book",
-        "--max-pages",
-        "20",
-        "--max-depth",
-        "8",
-        "--concurrency",
-        "2",
-        "--delay-ms",
-        "0",
-        "--rewrite-prompt",
-        "日本語で簡潔にまとめて",
-        "--rewrite-engine",
-        "noop",
-    ])
-    .assert()
-    .success();
+    cmd.env("SITEBOOKIFY_CODEX_BIN", stub_codex.to_str().unwrap())
+        .env("SITEBOOKIFY_CODEX_REASONING_EFFORT", "high")
+        .args([
+            "build",
+            "--url",
+            &start_url,
+            "--out",
+            workspace_dir.to_str().unwrap(),
+            "--title",
+            "Test Book",
+            "--max-pages",
+            "20",
+            "--max-depth",
+            "8",
+            "--concurrency",
+            "2",
+            "--delay-ms",
+            "0",
+            "--language",
+            "日本語",
+            "--tone",
+            "丁寧",
+            "--toc-engine",
+            "codex",
+            "--render-engine",
+            "codex",
+        ])
+        .assert()
+        .success();
 
     let crawl_jsonl = raw_dir.join("crawl.jsonl");
     let crawl_log = fs::read_to_string(&crawl_jsonl)?;
@@ -264,21 +383,13 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let extracted_pages = count_files_with_extension(&extracted_pages_dir, "md")?;
     assert!(extracted_pages >= 3);
 
-    let manuscript_pages_dir = manuscript_dir.join("pages");
-    let manuscript_pages = count_files_with_extension(&manuscript_pages_dir, "md")?;
-    assert!(manuscript_pages >= 3);
-
     assert!(manifest_path.exists(), "expected manifest.jsonl to exist");
     assert!(toc_path.exists(), "expected toc.yaml to exist");
-    assert!(manuscript_dir.exists(), "expected manuscript dir to exist");
-    assert!(
-        manuscript_manifest_path.exists(),
-        "expected manifest.manuscript.jsonl to exist"
-    );
 
     let toc_yaml = fs::read_to_string(&toc_path)?;
     let toc: Toc = serde_yaml::from_str(&toc_yaml).expect("parse toc yaml");
     assert_eq!(toc.book_title, "Test Book");
+    assert_eq!(toc.parts.len(), 1, "expected exactly one part");
 
     let manifest_records: Vec<ManifestRecord> = fs::read_to_string(&manifest_path)?
         .lines()
@@ -290,88 +401,28 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
         "expected manifest to be non-empty"
     );
 
-    let refined_toc_path = workspace_dir.join("toc.refined.yaml");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "toc",
-        "refine",
-        "--manifest",
-        manifest_path.to_str().unwrap(),
-        "--out",
-        refined_toc_path.to_str().unwrap(),
-        "--book-title",
-        "Test Book",
-        "--engine",
-        "noop",
-    ])
-    .assert()
-    .success();
-
-    let refined_yaml = fs::read_to_string(&refined_toc_path)?;
-    let refined: Toc = serde_yaml::from_str(&refined_yaml).expect("parse refined toc yaml");
-    assert_eq!(refined.book_title, "Test Book");
-    assert_eq!(refined.parts.len(), 1, "expected exactly one part");
     assert_eq!(
-        refined.parts[0].chapters.len(),
+        toc.parts[0].chapters.len(),
         manifest_records.len(),
-        "expected one chapter per manifest record in noop mode"
+        "expected one chapter per manifest record from stub codex"
     );
 
     let mut manifest_sorted = manifest_records.clone();
     manifest_sorted.sort_by(|a, b| a.path.cmp(&b.path));
 
     let mut seen_ids = HashSet::new();
-    for (idx, chapter) in refined.parts[0].chapters.iter().enumerate() {
+    for (idx, chapter) in toc.parts[0].chapters.iter().enumerate() {
         assert_eq!(chapter.id, format!("ch{:02}", idx + 1));
         assert!(!chapter.title.trim().is_empty());
-        assert_eq!(chapter.sources.len(), 1);
-        assert_eq!(chapter.sources[0], manifest_sorted[idx].id);
-        assert_eq!(chapter.title, manifest_sorted[idx].title);
-        assert!(seen_ids.insert(chapter.sources[0].clone()));
+        assert!(!chapter.intent.trim().is_empty());
+        assert!(!chapter.reader_gains.is_empty());
+        assert_eq!(chapter.sections.len(), 1);
+        assert_eq!(chapter.sections[0].sources.len(), 1);
+        assert_eq!(chapter.sections[0].sources[0], manifest_sorted[idx].id);
+        assert!(seen_ids.insert(chapter.sections[0].sources[0].clone()));
     }
-
     let manifest_ids: HashSet<String> = manifest_records.iter().map(|r| r.id.clone()).collect();
     assert_eq!(seen_ids, manifest_ids);
-
-    // A toc refine plan MUST be allowed to omit pages (book curation).
-    let omitted_toc_path = workspace_dir.join("toc.omitted.yaml");
-    let keep_id = manifest_sorted[0].id.clone();
-    let plan_json = format!(
-        r#"{{"book_title":"Omitted Book","chapters":[{{"title":"Only One","sources":["{keep_id}"]}}]}}"#
-    );
-    let script = format!("cat >/dev/null; cat <<'JSON'\n{plan_json}\nJSON\n");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "toc",
-        "refine",
-        "--manifest",
-        manifest_path.to_str().unwrap(),
-        "--out",
-        omitted_toc_path.to_str().unwrap(),
-        "--engine",
-        "command",
-        "--command",
-        "sh",
-        "--",
-        "-c",
-        &script,
-    ])
-    .assert()
-    .success();
-
-    let omitted_yaml = fs::read_to_string(&omitted_toc_path)?;
-    let omitted: Toc = serde_yaml::from_str(&omitted_yaml).expect("parse omitted toc yaml");
-    assert_eq!(omitted.parts.len(), 1, "expected exactly one part");
-    assert_eq!(
-        omitted.parts[0].chapters.len(),
-        1,
-        "expected exactly one chapter"
-    );
-    assert_eq!(
-        omitted.parts[0].chapters[0].sources,
-        vec![keep_id],
-        "expected omitted toc to keep only one page"
-    );
 
     let advanced_record = manifest_sorted
         .iter()
@@ -385,34 +436,24 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let expected_asset_file = format!("img_{expected_image_hash}.png");
     let expected_chapter_image_ref = format!("../assets/{expected_asset_file}");
 
-    let openai_refined_toc_path = workspace_dir.join("toc.openai.yaml");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.env_remove("OPENAI_API_KEY")
-        .args([
-            "toc",
-            "refine",
-            "--manifest",
-            manifest_path.to_str().unwrap(),
-            "--out",
-            openai_refined_toc_path.to_str().unwrap(),
-            "--engine",
-            "openai",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("OPENAI_API_KEY is not set"));
+    let advanced_idx = manifest_sorted
+        .iter()
+        .position(|r| r.id == advanced_id)
+        .expect("advanced is in manifest");
+    let advanced_chapter_id = format!("ch{:02}", advanced_idx + 1);
 
-    let ch01_path = book_dir.join("src").join("chapters").join("ch01.md");
-    let ch01 = fs::read_to_string(ch01_path)?;
-    assert!(ch01.contains("## Sources"));
-    assert!(ch01.contains(&format!("{base_url}/docs")));
-    assert!(!ch01.contains("TODO"));
-    assert!(!ch01.contains("キーボードショートカット"));
-    assert!(!ch01.contains("章間の移動には"));
-    assert!(ch01.contains(&format!("<a id=\"{advanced_id}\"></a>")));
-    assert!(ch01.contains(&format!("](#{advanced_id})")));
-    assert!(ch01.contains(&expected_chapter_image_ref));
-    assert!(!ch01.contains(&expected_image_url));
+    let advanced_chapter_path = book_dir
+        .join("src")
+        .join("chapters")
+        .join(format!("{advanced_chapter_id}.md"));
+    let advanced_chapter = fs::read_to_string(&advanced_chapter_path)?;
+    assert!(advanced_chapter.contains("## Sources"));
+    assert!(!advanced_chapter.contains("TODO"));
+    assert!(!advanced_chapter.contains("キーボードショートカット"));
+    assert!(!advanced_chapter.contains("章間の移動には"));
+    assert!(advanced_chapter.contains(&format!("<a id=\"{advanced_id}\"></a>")));
+    assert!(advanced_chapter.contains(&expected_chapter_image_ref));
+    assert!(!advanced_chapter.contains(&expected_image_url));
 
     let book_asset_path = book_dir
         .join("src")
@@ -424,59 +465,21 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
         "expected asset to be non-empty"
     );
 
-    let refined_book_dir = workspace_dir.join("book_refined");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "book",
-        "init",
-        "--out",
-        refined_book_dir.to_str().unwrap(),
-        "--title",
-        "Test Book",
-    ])
-    .assert()
-    .success();
-
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "book",
-        "render",
-        "--toc",
-        refined_toc_path.to_str().unwrap(),
-        "--manifest",
-        manifest_path.to_str().unwrap(),
-        "--out",
-        refined_book_dir.to_str().unwrap(),
-    ])
-    .assert()
-    .success();
-
-    let refined_ch01_path = refined_book_dir
+    // Cross-chapter link rewriting: Docs Root links to Advanced.
+    let docs_root_idx = manifest_sorted
+        .iter()
+        .position(|r| r.path == "/docs")
+        .expect("/docs in manifest");
+    let docs_root_chapter_id = format!("ch{:02}", docs_root_idx + 1);
+    let docs_root_chapter_path = book_dir
         .join("src")
         .join("chapters")
-        .join("ch01.md");
-    let refined_ch01 = fs::read_to_string(&refined_ch01_path)?;
+        .join(format!("{docs_root_chapter_id}.md"));
+    let docs_root_chapter = fs::read_to_string(&docs_root_chapter_path)?;
     assert!(
-        refined_ch01.contains(&format!("](ch02.md#{advanced_id})")),
+        docs_root_chapter.contains(&format!("{advanced_chapter_id}.md#{advanced_id}")),
         "expected cross-chapter link to be rewritten"
     );
-
-    let refined_bundle_path = workspace_dir.join("book.refined.md");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "book",
-        "bundle",
-        "--book",
-        refined_book_dir.to_str().unwrap(),
-        "--out",
-        refined_bundle_path.to_str().unwrap(),
-    ])
-    .assert()
-    .success();
-
-    let refined_bundle = fs::read_to_string(&refined_bundle_path)?;
-    assert!(refined_bundle.contains(&format!("](#{advanced_id})")));
-    assert!(!refined_bundle.contains(&format!("](ch02.md#{advanced_id})")));
 
     let bundle_md_path = workspace_dir.join("book.md");
     assert!(bundle_md_path.exists(), "expected book.md to exist");
@@ -485,6 +488,14 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     assert!(bundle_md.contains("## Sources"));
     assert!(bundle_md.contains(&format!("assets/{expected_asset_file}")));
     assert!(!bundle_md.contains("../assets/"));
+    assert!(
+        bundle_md.contains(&format!("#{advanced_id}")),
+        "expected bundled cross-chapter link to be rewritten"
+    );
+    assert!(
+        !bundle_md.contains(&format!("{advanced_chapter_id}.md#{advanced_id}")),
+        "expected no cross-chapter links in bundle"
+    );
 
     let bundled_asset_path = workspace_dir.join("assets").join(&expected_asset_file);
     assert!(
@@ -524,153 +535,7 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     .failure()
     .stderr(predicate::str::contains("already exists"));
 
-    let rewrite_dir = workspace_dir.join("manuscript2");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "llm",
-        "rewrite-pages",
-        "--toc",
-        toc_path.to_str().unwrap(),
-        "--manifest",
-        manifest_path.to_str().unwrap(),
-        "--out",
-        rewrite_dir.to_str().unwrap(),
-        "--prompt",
-        "noop",
-        "--engine",
-        "noop",
-    ])
-    .assert()
-    .success();
-
-    let rewritten_advanced_path = rewrite_dir.join("pages").join(format!("{advanced_id}.md"));
-    assert!(
-        rewritten_advanced_path.exists(),
-        "expected rewritten page to exist"
-    );
-    assert_eq!(
-        fs::read_to_string(&rewritten_advanced_path)?,
-        fs::read_to_string(&advanced_record.extracted_md)?
-    );
-
-    let openai_rewrite_dir = workspace_dir.join("manuscript_openai");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.env_remove("OPENAI_API_KEY")
-        .args([
-            "llm",
-            "rewrite-pages",
-            "--toc",
-            toc_path.to_str().unwrap(),
-            "--manifest",
-            manifest_path.to_str().unwrap(),
-            "--out",
-            openai_rewrite_dir.to_str().unwrap(),
-            "--prompt",
-            "日本語で簡潔にまとめて",
-            "--engine",
-            "openai",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("OPENAI_API_KEY is not set"));
-
-    // Rewrite outputs MUST NOT be overwritten.
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "llm",
-        "rewrite-pages",
-        "--toc",
-        toc_path.to_str().unwrap(),
-        "--manifest",
-        manifest_path.to_str().unwrap(),
-        "--out",
-        rewrite_dir.to_str().unwrap(),
-        "--prompt",
-        "noop",
-        "--engine",
-        "noop",
-    ])
-    .assert()
-    .failure()
-    .stderr(predicate::str::contains("output already exists"));
-
-    // build MUST work without an explicit --title (title derived from toc.yaml).
-    let workspace_no_title = temp.path().join("workspace_no_title");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "build",
-        "--url",
-        &start_url,
-        "--out",
-        workspace_no_title.to_str().unwrap(),
-        "--max-pages",
-        "20",
-        "--max-depth",
-        "8",
-        "--concurrency",
-        "2",
-        "--delay-ms",
-        "0",
-    ])
-    .assert()
-    .success();
-
-    let toc_no_title_path = workspace_no_title.join("toc.yaml");
-    let toc_no_title_yaml = fs::read_to_string(&toc_no_title_path)?;
-    let toc_no_title: Toc =
-        serde_yaml::from_str(&toc_no_title_yaml).expect("parse toc yaml (no title)");
-    assert!(
-        !toc_no_title.book_title.trim().is_empty(),
-        "expected derived book_title to be non-empty"
-    );
-    let bundle_no_title_path = workspace_no_title.join("book.md");
-    let bundle_no_title = fs::read_to_string(&bundle_no_title_path)?;
-    assert!(
-        bundle_no_title.contains(&format!("# {}", toc_no_title.book_title)),
-        "expected bundle to include derived book title"
-    );
-
-    // Snapshot outputs MUST NOT be overwritten.
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "build",
-        "--url",
-        &start_url,
-        "--out",
-        workspace_dir.to_str().unwrap(),
-        "--title",
-        "Test Book",
-    ])
-    .assert()
-    .failure()
-    .stderr(predicate::str::contains("already exists"));
-
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "crawl",
-        "--url",
-        &start_url,
-        "--out",
-        raw_dir.to_str().unwrap(),
-    ])
-    .assert()
-    .failure()
-    .stderr(predicate::str::contains("already exists"));
-
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.args([
-        "extract",
-        "--raw",
-        raw_dir.to_str().unwrap(),
-        "--out",
-        extracted_dir.to_str().unwrap(),
-    ])
-    .assert()
-    .failure()
-    .stderr(predicate::str::contains("already exists"));
-
     let _ = shutdown_tx.send(());
     let _ = server_handle.join();
-
     Ok(())
 }

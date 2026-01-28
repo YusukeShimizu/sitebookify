@@ -17,7 +17,6 @@
 - **Extracted Page**: Raw から本文抽出し、素材化した Markdown。
 - **Manifest**: Extracted Page の台帳（JSONL）。
 - **TOC**: 教科書の章立て（YAML）。
-- **Manuscript**: TOC に採用されたページを「本向け」に書き換えた Markdown 素材。
 - **Book**: mdBook プロジェクト（`book/`）。
 - **Bundled Markdown**: mdBook（`book/`）を 1 ファイルに統合した Markdown（任意のパス）。
 
@@ -31,11 +30,7 @@ raw/
 extracted/
   pages/
     <page_id>.md
-manuscript/ (optional)
-  pages/
-    <page_id>.md
 manifest.jsonl
-manifest.manuscript.jsonl (optional)
 toc.yaml
 book/
   book.toml
@@ -43,7 +38,11 @@ book/
     SUMMARY.md
     chapters/
       ch01.md
+    assets/
+      img_<sha256>.png
 book.md (optional)
+assets/ (optional)
+  img_<sha256>.png
 ```
 
 ## `raw/crawl.jsonl`
@@ -116,7 +115,11 @@ Extracted Page は Markdown ファイルである。
   - `chapters`（list, required）: Chapter の配列。
     - `id`（string, required）: 章 ID（例: `ch01`）。
     - `title`（string, required）: 章タイトル。
-    - `sources`（list[string], required）: `manifest.jsonl` の `id` の配列。
+    - `intent`（string, required）: 章の狙い。
+    - `reader_gains`（list[string], required）: 読者が得るもの。
+    - `sections`（list, required）: 節の配列。
+      - `title`（string, required）: 節タイトル。
+      - `sources`（list[string], required）: その節の材料にする `manifest.jsonl` の `id` の配列。
 
 ## `book/`（mdBook）
 
@@ -137,14 +140,3 @@ Bundled Markdown は生成物である。
 
 - Bundled Markdown の出力先パスは `sitebookify book bundle --out <FILE>` で指定する。
 - 出力ファイルが既に存在する場合は失敗する（上書きしない）。
-
-## Manuscript（`llm rewrite-pages`）
-
-Manuscript は生成物である。
-TOC に採用されたページを対象に、抽出 Markdown（Extracted Page）を「本として読みやすい体裁」に書き換えた素材を出力する。
-
-注意事項は次のとおり。
-
-- 出力先ディレクトリが既に存在する場合は失敗する（上書きしない）。
-- front matter の `id`, `url`, `retrieved_at`, `raw_html_path` は元の Extracted Page を引き継ぐ。
-- 書き換えはユーザプロンプトに従うが、入力にない事実は追加しない。

@@ -33,14 +33,9 @@ async fn try_main() -> anyhow::Result<()> {
             sitebookify::manifest::run(args).context("manifest")?;
         }
         sitebookify::cli::Command::Toc {
-            command: sitebookify::cli::TocCommand::Init(args),
+            command: sitebookify::cli::TocCommand::Create(args),
         } => {
-            sitebookify::toc::init(args).context("toc init")?;
-        }
-        sitebookify::cli::Command::Toc {
-            command: sitebookify::cli::TocCommand::Refine(args),
-        } => {
-            sitebookify::toc::refine(args).await.context("toc refine")?;
+            sitebookify::toc::create(args).await.context("toc create")?;
         }
         sitebookify::cli::Command::Book {
             command: sitebookify::cli::BookCommand::Init(args),
@@ -57,13 +52,6 @@ async fn try_main() -> anyhow::Result<()> {
             command: sitebookify::cli::BookCommand::Bundle(args),
         } => {
             sitebookify::book::bundle(args).context("book bundle")?;
-        }
-        sitebookify::cli::Command::Llm {
-            command: sitebookify::cli::LlmCommand::RewritePages(args),
-        } => {
-            sitebookify::llm::rewrite_pages(args)
-                .await
-                .context("llm rewrite-pages")?;
         }
     }
 

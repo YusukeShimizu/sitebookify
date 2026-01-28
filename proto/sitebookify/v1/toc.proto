@@ -22,8 +22,25 @@ message TocChapter {
   // Human-readable chapter title.
   string title = 2 [(buf.validate.field).string.min_len = 1];
 
-  // Ordered list of ManifestRecord IDs included in this chapter.
-  repeated string sources = 3 [
+  // Chapter intent (狙い).
+  string intent = 3 [(buf.validate.field).string.min_len = 1];
+
+  // What the reader gains (読者が得るもの).
+  repeated string reader_gains = 4 [
+    (buf.validate.field).repeated.min_items = 1,
+    (buf.validate.field).repeated.items.string.min_len = 1
+  ];
+
+  // Sections in this chapter.
+  repeated TocSection sections = 5 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message TocSection {
+  // Human-readable section title.
+  string title = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Ordered list of ManifestRecord IDs used as sources for this section.
+  repeated string sources = 2 [
     (buf.validate.field).repeated.min_items = 1,
     (buf.validate.field).repeated.items.string.pattern = "^p_[0-9a-f]{64}$"
   ];

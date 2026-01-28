@@ -3,7 +3,7 @@
 ## Goal
 
 - 翻訳（`llm translate`）と Export（`export`）機能を削除し、CLI と仕様を簡素化する。
-- TOC 作成後に、TOC で採用された各ページ（source page）を LLM で「本として読みやすい体裁」に書き換えられるようにする。
+- TOC 作成後は、TOC で採用された各ページ（source page）を LLM で「本として読みやすい体裁」へ書き換えられるようにする。
   - 例: ユーザプロンプト「日本語で簡潔にまとめて」を加味して文章中心に整形する。
 - 以降の mdBook 生成（`book render`）および `book bundle` は、この書き換え後のページ内容を入力として行う。
 
