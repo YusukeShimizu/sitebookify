@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -186,22 +185,6 @@ fn count_files_with_extension(dir: &Path, extension: &str) -> anyhow::Result<usi
     Ok(count)
 }
 
-fn pandoc_available() -> bool {
-    Command::new("pandoc")
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
-fn weasyprint_available() -> bool {
-    Command::new("weasyprint")
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
 #[test]
 fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let (base_url, shutdown_tx, server_handle) = spawn_docs_server();
@@ -214,6 +197,8 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let manifest_path = workspace_dir.join("manifest.jsonl");
     let toc_path = workspace_dir.join("toc.yaml");
     let book_dir = workspace_dir.join("book");
+    let manuscript_dir = workspace_dir.join("manuscript");
+    let manuscript_manifest_path = workspace_dir.join("manifest.manuscript.jsonl");
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
     cmd.args([
@@ -232,9 +217,9 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
         "2",
         "--delay-ms",
         "0",
-        "--translate-to",
-        "ja",
-        "--translate-engine",
+        "--rewrite-prompt",
+        "日本語で簡潔にまとめて",
+        "--rewrite-engine",
         "noop",
     ])
     .assert()
@@ -279,8 +264,17 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let extracted_pages = count_files_with_extension(&extracted_pages_dir, "md")?;
     assert!(extracted_pages >= 3);
 
+    let manuscript_pages_dir = manuscript_dir.join("pages");
+    let manuscript_pages = count_files_with_extension(&manuscript_pages_dir, "md")?;
+    assert!(manuscript_pages >= 3);
+
     assert!(manifest_path.exists(), "expected manifest.jsonl to exist");
     assert!(toc_path.exists(), "expected toc.yaml to exist");
+    assert!(manuscript_dir.exists(), "expected manuscript dir to exist");
+    assert!(
+        manuscript_manifest_path.exists(),
+        "expected manifest.manuscript.jsonl to exist"
+    );
 
     let toc_yaml = fs::read_to_string(&toc_path)?;
     let toc: Toc = serde_yaml::from_str(&toc_yaml).expect("parse toc yaml");
@@ -502,14 +496,6 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
         "expected bundled asset to be non-empty"
     );
 
-    let built_translated_md_path = workspace_dir.join("book.ja.md");
-    assert!(
-        built_translated_md_path.exists(),
-        "expected book.ja.md to exist"
-    );
-    let built_translated_md = fs::read_to_string(&built_translated_md_path)?;
-    assert_eq!(built_translated_md, bundle_md);
-
     let bundle2_md_path = workspace_dir.join("book.bundle2.md");
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
     cmd.args([
@@ -538,38 +524,49 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     .failure()
     .stderr(predicate::str::contains("already exists"));
 
-    let translated_md_path = workspace_dir.join("book.translated.md");
+    let rewrite_dir = workspace_dir.join("manuscript2");
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
     cmd.args([
         "llm",
-        "translate",
-        "--in",
-        bundle_md_path.to_str().unwrap(),
+        "rewrite-pages",
+        "--toc",
+        toc_path.to_str().unwrap(),
+        "--manifest",
+        manifest_path.to_str().unwrap(),
         "--out",
-        translated_md_path.to_str().unwrap(),
-        "--to",
-        "ja",
+        rewrite_dir.to_str().unwrap(),
+        "--prompt",
+        "noop",
         "--engine",
         "noop",
     ])
     .assert()
     .success();
 
-    let translated_md = fs::read_to_string(&translated_md_path)?;
-    assert_eq!(translated_md, bundle_md);
+    let rewritten_advanced_path = rewrite_dir.join("pages").join(format!("{advanced_id}.md"));
+    assert!(
+        rewritten_advanced_path.exists(),
+        "expected rewritten page to exist"
+    );
+    assert_eq!(
+        fs::read_to_string(&rewritten_advanced_path)?,
+        fs::read_to_string(&advanced_record.extracted_md)?
+    );
 
-    let openai_translated_md_path = workspace_dir.join("book.openai.md");
+    let openai_rewrite_dir = workspace_dir.join("manuscript_openai");
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
     cmd.env_remove("OPENAI_API_KEY")
         .args([
             "llm",
-            "translate",
-            "--in",
-            bundle_md_path.to_str().unwrap(),
+            "rewrite-pages",
+            "--toc",
+            toc_path.to_str().unwrap(),
+            "--manifest",
+            manifest_path.to_str().unwrap(),
             "--out",
-            openai_translated_md_path.to_str().unwrap(),
-            "--to",
-            "ja",
+            openai_rewrite_dir.to_str().unwrap(),
+            "--prompt",
+            "日本語で簡潔にまとめて",
             "--engine",
             "openai",
         ])
@@ -577,69 +574,25 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
         .failure()
         .stderr(predicate::str::contains("OPENAI_API_KEY is not set"));
 
-    // Translated outputs MUST NOT be overwritten.
+    // Rewrite outputs MUST NOT be overwritten.
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
     cmd.args([
         "llm",
-        "translate",
-        "--in",
-        bundle_md_path.to_str().unwrap(),
+        "rewrite-pages",
+        "--toc",
+        toc_path.to_str().unwrap(),
+        "--manifest",
+        manifest_path.to_str().unwrap(),
         "--out",
-        translated_md_path.to_str().unwrap(),
-        "--to",
-        "ja",
+        rewrite_dir.to_str().unwrap(),
+        "--prompt",
+        "noop",
         "--engine",
         "noop",
     ])
     .assert()
     .failure()
-    .stderr(predicate::str::contains("already exists"));
-
-    if pandoc_available() {
-        let epub_path = workspace_dir.join("book.epub");
-        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-        cmd.args([
-            "export",
-            "--in",
-            translated_md_path.to_str().unwrap(),
-            "--out",
-            epub_path.to_str().unwrap(),
-            "--format",
-            "epub",
-            "--title",
-            "Test Book",
-        ])
-        .assert()
-        .success();
-        assert!(epub_path.exists(), "expected epub to exist");
-        assert!(
-            fs::metadata(epub_path)?.len() > 0,
-            "expected epub to be non-empty"
-        );
-    }
-
-    if pandoc_available() && weasyprint_available() {
-        let pdf_path = workspace_dir.join("book.pdf");
-        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-        cmd.args([
-            "export",
-            "--in",
-            translated_md_path.to_str().unwrap(),
-            "--out",
-            pdf_path.to_str().unwrap(),
-            "--format",
-            "pdf",
-            "--title",
-            "Test Book",
-        ])
-        .assert()
-        .success();
-        assert!(pdf_path.exists(), "expected pdf to exist");
-        assert!(
-            fs::metadata(pdf_path)?.len() > 0,
-            "expected pdf to be non-empty"
-        );
-    }
+    .stderr(predicate::str::contains("output already exists"));
 
     // build MUST work without an explicit --title (title derived from toc.yaml).
     let workspace_no_title = temp.path().join("workspace_no_title");

@@ -32,9 +32,6 @@ async fn try_main() -> anyhow::Result<()> {
         sitebookify::cli::Command::Manifest(args) => {
             sitebookify::manifest::run(args).context("manifest")?;
         }
-        sitebookify::cli::Command::Export(args) => {
-            sitebookify::export::run(args).context("export")?;
-        }
         sitebookify::cli::Command::Toc {
             command: sitebookify::cli::TocCommand::Init(args),
         } => {
@@ -62,11 +59,11 @@ async fn try_main() -> anyhow::Result<()> {
             sitebookify::book::bundle(args).context("book bundle")?;
         }
         sitebookify::cli::Command::Llm {
-            command: sitebookify::cli::LlmCommand::Translate(args),
+            command: sitebookify::cli::LlmCommand::RewritePages(args),
         } => {
-            sitebookify::llm::translate(args)
+            sitebookify::llm::rewrite_pages(args)
                 .await
-                .context("llm translate")?;
+                .context("llm rewrite-pages")?;
         }
     }
 

@@ -4,7 +4,7 @@ use anyhow::Context as _;
 
 use crate::cli::{
     BookBundleArgs, BookInitArgs, BookRenderArgs, BuildArgs, CrawlArgs, ExtractArgs,
-    LlmTranslateArgs, ManifestArgs, TocInitArgs, TocRefineArgs,
+    LlmRewritePagesArgs, ManifestArgs, TocInitArgs, TocRefineArgs,
 };
 use crate::formats::Toc;
 
@@ -82,6 +82,58 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
         .with_context(|| format!("read toc: {}", toc_path.display()))?;
     let toc: Toc = serde_yaml::from_str(&toc_yaml).context("parse toc")?;
 
+    let (manifest_for_book, _manuscript_dir) = if let Some(prompt) = args.rewrite_prompt.clone() {
+        let manuscript_dir = args
+            .rewrite_out
+            .as_deref()
+            .map(PathBuf::from)
+            .map(|p| {
+                if p.is_absolute() {
+                    p
+                } else {
+                    workspace_dir.join(p)
+                }
+            })
+            .unwrap_or_else(|| workspace_dir.join("manuscript"));
+
+        let manuscript_manifest_path = workspace_dir.join("manifest.manuscript.jsonl");
+
+        tracing::info!(
+            out = %manuscript_dir.display(),
+            "build: llm rewrite-pages"
+        );
+        crate::llm::rewrite_pages(LlmRewritePagesArgs {
+            toc: toc_path.to_string_lossy().to_string(),
+            manifest: manifest_path.to_string_lossy().to_string(),
+            out: manuscript_dir.to_string_lossy().to_string(),
+            prompt,
+            engine: args.rewrite_engine,
+            command: args.rewrite_command.clone(),
+            command_args: args.rewrite_command_args.clone(),
+            openai_model: args.openai_model.clone(),
+            openai_base_url: args.openai_base_url.clone(),
+            openai_max_chars: args.openai_max_chars,
+            openai_temperature: args.openai_temperature,
+            openai_concurrency: args.openai_concurrency,
+            openai_retries: args.openai_retries,
+            allow_missing_tokens: args.rewrite_allow_missing_tokens,
+            force: false,
+        })
+        .await
+        .context("llm rewrite-pages")?;
+
+        tracing::info!("build: manifest (manuscript)");
+        crate::manifest::run(ManifestArgs {
+            extracted: manuscript_dir.to_string_lossy().to_string(),
+            out: manuscript_manifest_path.to_string_lossy().to_string(),
+        })
+        .context("manifest (manuscript)")?;
+
+        (manuscript_manifest_path, Some(manuscript_dir))
+    } else {
+        (manifest_path.clone(), None)
+    };
+
     tracing::info!("build: book init");
     crate::book::init(BookInitArgs {
         out: book_dir.to_string_lossy().to_string(),
@@ -92,7 +144,7 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     tracing::info!("build: book render");
     let render_args = BookRenderArgs {
         toc: toc_path.to_string_lossy().to_string(),
-        manifest: manifest_path.to_string_lossy().to_string(),
+        manifest: manifest_for_book.to_string_lossy().to_string(),
         out: book_dir.to_string_lossy().to_string(),
     };
     tokio::task::block_in_place(|| crate::book::render(render_args)).context("book render")?;
@@ -105,47 +157,5 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     })
     .context("book bundle")?;
 
-    if let Some(to) = &args.translate_to {
-        let translated_out = args.translate_out.clone().unwrap_or_else(|| {
-            default_translated_md_path(workspace_dir.as_path(), to)
-                .to_string_lossy()
-                .to_string()
-        });
-
-        tracing::info!(to = %to, out = %translated_out, "build: llm translate");
-        crate::llm::translate(LlmTranslateArgs {
-            input: bundled_md_path.to_string_lossy().to_string(),
-            out: translated_out,
-            to: to.clone(),
-            engine: args.translate_engine,
-            command: args.translate_command.clone(),
-            command_args: args.translate_command_args.clone(),
-            openai_model: args.openai_model.clone(),
-            openai_base_url: args.openai_base_url.clone(),
-            openai_max_chars: args.openai_max_chars,
-            openai_temperature: args.openai_temperature,
-            openai_concurrency: args.openai_concurrency,
-            openai_retries: args.openai_retries,
-            force: false,
-        })
-        .await
-        .context("llm translate")?;
-    }
-
     Ok(())
-}
-
-fn default_translated_md_path(workspace_dir: &std::path::Path, to: &str) -> PathBuf {
-    let mut slug = String::new();
-    for ch in to.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-            slug.push(ch);
-        } else {
-            slug.push('_');
-        }
-    }
-    if slug.trim_matches('_').is_empty() {
-        slug = "translated".to_owned();
-    }
-    workspace_dir.join(format!("book.{slug}.md"))
 }

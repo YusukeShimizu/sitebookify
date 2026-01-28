@@ -61,14 +61,14 @@ sitebookify build --url https://example.com/docs/ --out workspace
 # sitebookify build --url https://example.com/docs/ --out workspace --title "Example Docs Textbook"
 ```
 
-翻訳まで含める場合は、`--translate-to` を指定する。
+本向けの書き換えまで含める場合は、`--rewrite-prompt` を指定する。
 
 ```sh
 sitebookify build \
   --url https://example.com/docs/ \
   --out workspace \
-  --translate-to ja \
-  --translate-engine openai \
+  --rewrite-prompt "日本語で簡潔にまとめて" \
+  --rewrite-engine openai \
   --openai-model gpt-5-mini
 ```
 
@@ -81,8 +81,8 @@ sitebookify build \
   --toc-refine \
   --toc-refine-engine openai \
   --openai-model gpt-5-mini \
-  --translate-to ja \
-  --translate-engine openai
+  --rewrite-prompt "日本語で簡潔にまとめて" \
+  --rewrite-engine openai
 ```
 
 ワークスペースの中身（MVP）は次の通り。
@@ -91,12 +91,13 @@ sitebookify build \
 workspace/
   raw/
   extracted/
+  manuscript/
   manifest.jsonl
+  manifest.manuscript.jsonl
   toc.yaml
   book/
   assets/
   book.md
-  book.<LANG>.md
 ```
 
 手動で実行したい場合は、次の順に実行する。
@@ -108,9 +109,14 @@ sitebookify manifest --extracted extracted --out manifest.jsonl
 sitebookify toc init --manifest manifest.jsonl --out toc.yaml
 # 章立てを LLM で調整したい場合（任意）
 sitebookify toc refine --manifest manifest.jsonl --out toc.refined.yaml --book-title "Example Docs Textbook" --engine openai --openai-model gpt-5-mini
+# 本向けに本文を書き換えたい場合（任意）
+sitebookify llm rewrite-pages --toc toc.refined.yaml --manifest manifest.jsonl --out manuscript --prompt "日本語で簡潔にまとめて" --engine openai --openai-model gpt-5-mini
+sitebookify manifest --extracted manuscript --out manifest.manuscript.jsonl
 sitebookify book init --out book --title "Example Docs Textbook"
-# toc refine を実行しない場合は `--toc toc.yaml` を指定する
-sitebookify book render --toc toc.refined.yaml --manifest manifest.jsonl --out book
+# toc refine / rewrite を実行しない場合は、それぞれ入力を切り替える
+# - toc refine なし: `--toc toc.yaml`
+# - rewrite なし: `--manifest manifest.jsonl`
+sitebookify book render --toc toc.refined.yaml --manifest manifest.manuscript.jsonl --out book
 ```
 
 ## 1ファイル出力（Bundle）
@@ -127,53 +133,36 @@ sitebookify book render --toc toc.refined.yaml --manifest manifest.jsonl --out b
 sitebookify book bundle --book book --out book.md
 ```
 
-## 翻訳（LLM）
+## 書き換え（LLM）
 
-`book bundle` の出力（例: `book.md`）を翻訳できる。
-翻訳時は、できるだけ元の Markdown 形態を保つ。
+TOC に採用されたページ（`manifest.jsonl` の `id`）を対象に、Extracted Page を「本向け」の Markdown に書き換える。
+書き換え時は、コードや URL 等の重要な要素を壊さないことを優先する。
 
-- 翻訳コマンドは **stdin で Markdown を受け取り、stdout に Markdown を返す**フィルタとして動作する必要がある。
-- 目標言語は環境変数 `SITEBOOKIFY_TRANSLATE_TO` で渡される。
+- 書き換えコマンドは **stdin で Markdown を受け取り、stdout に Markdown を返す**フィルタとして動作する必要がある。
+- ユーザプロンプトは環境変数 `SITEBOOKIFY_REWRITE_PROMPT` で渡される。
 
 ```sh
-# 例: 翻訳エンジンとして外部コマンドを呼び出す
-sitebookify llm translate --in book.md --out book.ja.md --to ja --engine command --command <TRANSLATOR> -- <ARGS...>
+# 例: 書き換えエンジンとして外部コマンドを呼び出す
+sitebookify llm rewrite-pages --toc toc.yaml --manifest manifest.jsonl --out manuscript --prompt "日本語で簡潔にまとめて" --engine command --command <REWRITER> -- <ARGS...>
 ```
 
-OpenAI API で翻訳する場合は `openai` を使う。
+OpenAI API で書き換える場合は `openai` を使う。
 API キーは環境変数 `OPENAI_API_KEY` で渡す。
 
 ```sh
 echo 'export OPENAI_API_KEY=...' > .envrc.local
 direnv allow
-sitebookify llm translate --in book.md --out book.ja.md --to ja --engine openai --openai-model gpt-5-mini
+sitebookify llm rewrite-pages --toc toc.yaml --manifest manifest.jsonl --out manuscript --prompt "日本語で簡潔にまとめて" --engine openai --openai-model gpt-5-mini
 ```
 
 入力が大きい場合は `--openai-max-chars` で分割サイズを調整する。
-翻訳を高速化したい場合は `--openai-concurrency` で並列数を上げる（例: `4`）。
-プレースホルダ（`{{SBY_TOKEN_000000}}`）が壊れて失敗する場合は、`--openai-retries` を増やすか、`--openai-max-chars` を小さくする。
-翻訳の進捗はログ（stderr）に出力される。
-一部のチャンクが失敗した場合でも、処理は継続される。
-失敗したチャンクは、翻訳前の内容（原文）をそのまま出力する。
-プレースホルダ（`{{SBY_TOKEN_000000}}`）の検証に失敗した場合は、自動で補正を試みる。
-補正できない場合は、失敗した箇所（該当チャンク）のみ原文に戻して継続する。
-それでも復旧できない場合は、入力（原文）をそのまま出力する。
+書き換えを高速化したい場合は `--openai-concurrency` で並列数を上げる（例: `4`）。
+進捗はログ（stderr）に出力される。
 
-翻訳せずに（動作確認用に）入力をそのまま出力したい場合は `noop` を使う。
+書き換えずに（動作確認用に）入力をそのまま出力したい場合は `noop` を使う。
 
 ```sh
-sitebookify llm translate --in book.md --out book.copy.md --to ja --engine noop
-```
-
-## 出力（Export）
-
-統合/翻訳済み Markdown を `pandoc` 経由で `epub` / `pdf` 等に変換できる。
-PDF はデフォルトで `weasyprint` を使い、利用できない場合は `tectonic` にフォールバックする。
-`pandoc` が見つからない場合は、リポジトリ直下での実行に限り `nix develop -c pandoc` を自動で試す。
-
-```sh
-sitebookify export --in book.ja.md --out book.epub --format epub --title "Example Docs Textbook"
-sitebookify export --in book.ja.md --out book.pdf --format pdf --title "Example Docs Textbook"
+sitebookify llm rewrite-pages --toc toc.yaml --manifest manifest.jsonl --out manuscript --prompt "noop" --engine noop
 ```
 
 ## Logging

@@ -58,17 +58,19 @@ concept SitebookifyCLI
 purpose
     ログイン不要の公開サイトをクロールし、Markdown 素材を生成する。
     章立て（TOC）に従って mdBook 形式の教科書 Markdown を出力する。
-    mdBook 出力を 1 つの Markdown に統合し、LLM 翻訳と各種フォーマット変換の前処理にできるようにする。
+    mdBook 出力を 1 つの Markdown に統合し、LLM による「本向けの書き換え」の入力にできるようにする。
+    TOC 作成後に、ユーザプロンプトを加味して各ページ内容を「本として読みやすい体裁（文章中心）」に書き換える。
     robots.txt は MVP では未対応である。
 state
     binary_name: string
     raw_dir: string
     extracted_dir: string
+    manuscript_dir: string
     manifest_path: string
+    manuscript_manifest_path: string
     toc_path: string
     book_dir: string
     bundle_path: string
-    translated_bundle_path: string
 actions
     crawl [
         url: string
@@ -129,23 +131,25 @@ actions
         when `book/src/assets` exists, copy it to `assets/` next to `out` (without overwriting existing files)
         rewrite image paths from `../assets/*` to `assets/*`
         do not overwrite existing output files
-    llm_translate [ input: string ; out: string ; to: string ; engine: string ]
+    llm_rewrite_pages [
+        toc: string
+        manifest: string
+        out: string
+        prompt: string
+        engine: string
+        allow_missing_tokens: boolean (optional)
+    ]
         => [ exit_code: 0 ]
-        write a translated Markdown file
+        write `<OUT>/pages/*.md` (Markdown with YAML front matter)
+        keep front matter fields (`id`, `url`, `retrieved_at`, `raw_html_path`) from the extracted page
+        may update the `title` for book readability
+        rewrite the body as book-first prose (mostly text; optionally small tables/figures/code)
+        do not add facts that are not present in the input snapshot
+        when the rewrite output is missing placeholder tokens, keep the original section by default
+        when `allow_missing_tokens` is true, keep the rewritten output even if placeholder tokens are missing
         when engine is "openai", require env `OPENAI_API_KEY` and call OpenAI Responses API
-        when engine is "openai", chunk the input and call OpenAI concurrently
-        emit translation progress logs (done/total chunks)
-        when a chunk translation fails, keep the original chunk and continue
-        when placeholder token verification fails, patch the output with original placeholders and continue
-        when placeholder token patching fails, restore the affected chunks to the original input and continue
-        when placeholder restoration fails, output the original input
         when engine is "command", invoke an external command as a filter (stdin -> stdout)
-        do not overwrite existing output files
-    export [ input: string ; out: string ; format: string ]
-        => [ exit_code: 0 ]
-        write `out` converted from `input` (e.g. epub/pdf via external tools)
-        when format is "pdf", prefer pandoc `--pdf-engine=weasyprint` when available, and fall back to `tectonic`
-        when `pandoc` is not available, and `nix` + `flake.nix` are available, invoke `pandoc` via `nix develop -c pandoc`
+        when engine is "noop", copy the input body without rewriting
         do not overwrite existing output files
     build [
         url: string
@@ -157,14 +161,15 @@ actions
         delay_ms: number
         toc_refine: boolean (optional)
         toc_refine_engine: string (optional)
-        translate_to: string (optional)
-        translate_engine: string (optional)
+        rewrite_prompt: string (optional)
+        rewrite_engine: string (optional)
+        rewrite_allow_missing_tokens: boolean (optional)
     ]
         => [ exit_code: 0 ]
         write `<OUT>/raw/**`, `<OUT>/extracted/**`, `<OUT>/manifest.jsonl`, `<OUT>/toc.yaml`, and `<OUT>/book/**`
         write `<OUT>/book.md`
         write `<OUT>/assets/**`
-        when `translate_to` is set, write `<OUT>/book.<LANG>.md`
+        when `rewrite_prompt` is set, write `<OUT>/manuscript/**` and `<OUT>/manifest.manuscript.jsonl`
         do not overwrite existing snapshot files
 operational principle
     after crawl [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/raw" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ]
@@ -183,11 +188,10 @@ operational principle
     then book_bundle [ book: "<TMP>/book" ; out: "<TMP>/book.md" ]
         => [ exit_code: 0 ]
         `<TMP>/book.md` contains `## Sources`
-    after build [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/workspace" ; title: "Test Book" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ; toc_refine: true ; toc_refine_engine: "noop" ; translate_to: "ja" ; translate_engine: "noop" ]
+    after build [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/workspace" ; title: "Test Book" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ; toc_refine: true ; toc_refine_engine: "noop" ; rewrite_prompt: "日本語で簡潔にまとめて" ; rewrite_engine: "noop" ]
         => [ exit_code: 0 ]
         `<TMP>/workspace/book/src/chapters/ch01.md` contains `## Sources`
         `<TMP>/workspace/book.md` contains `## Sources`
-        `<TMP>/workspace/book.ja.md` contains `## Sources`
 ```
 
 ```text
@@ -241,7 +245,7 @@ actions
     run [ ]
         => [ ok: boolean ]
         run `cargo test --all`
-        include an end-to-end pipeline test for `build` (internally runs `crawl` → `extract` → `manifest` → `toc init` → `book render` → `book bundle` → `llm translate` when enabled)
+        include an end-to-end pipeline test for `build` (internally runs `crawl` → `extract` → `manifest` → `toc init/refine` → `llm rewrite-pages` when enabled → `book render` → `book bundle`)
 ```
 
 ```text

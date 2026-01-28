@@ -28,17 +28,16 @@ The typical workflow is:
 3. `manifest` (JSONL index)
 4. `toc init` (YAML chapter layout)
 5. `toc refine` (optional: reorder/omit pages + title via LLM)
-6. `book init` (mdBook skeleton)
-7. `book render` (generate `book/src/`)
-8. `book bundle` (single Markdown file + assets)
-9. `llm translate` (optional: translated Markdown)
-10. `export` (optional: epub/pdf via `pandoc`)
+6. `llm rewrite-pages` (optional: rewrite pages into book-first prose)
+7. `book init` (mdBook skeleton)
+8. `book render` (generate `book/src/`)
+9. `book bundle` (single Markdown file + assets)
 
 ## Commands
 
 ### `build`
 
-Run the full pipeline (crawl → extract → manifest → toc (init/refine) → book (init/render) → bundle → (optional) translate) in one command.
+Run the full pipeline (crawl → extract → manifest → toc (init/refine) → (optional) rewrite-pages → book (init/render) → bundle) in one command.
 
 ```sh
 sitebookify build \
@@ -53,12 +52,13 @@ Workspace layout (MVP):
 <out>/
   raw/
   extracted/
+  manuscript/               # optional (created when rewrite is enabled)
   manifest.jsonl
+  manifest.manuscript.jsonl # optional (created when rewrite is enabled)
   toc.yaml
   book/
   assets/
   book.md
-  book.<LANG>.md
 ```
 
 Notes (MVP):
@@ -66,7 +66,8 @@ Notes (MVP):
 - Workspaces are write-once: if `--out` already exists, `build` fails.
 - Crawl flags (`--max-pages`, `--max-depth`, `--concurrency`, `--delay-ms`) are supported.
 - If `--toc-refine` is set, the LLM may reorder/omit pages and propose a better title.
-- If `--translate-to <LANG>` is set, `build` writes `book.<LANG>.md` (requires `OPENAI_API_KEY` when using `--translate-engine openai`).
+- If `--rewrite-prompt <TEXT>` is set, `build` rewrites TOC-selected pages into `manuscript/` and renders the book from it.
+  - `OPENAI_API_KEY` is required when `--rewrite-engine openai` is used.
 
 ### `crawl`
 
@@ -126,6 +127,27 @@ If you want to override the generated book title:
 
 ```sh
 sitebookify toc init --manifest manifest.jsonl --out toc.yaml --book-title "My Book"
+```
+
+### `toc refine` (optional)
+
+Refine reading order (and optionally omit pages) via an LLM.
+
+```sh
+sitebookify toc refine --manifest manifest.jsonl --out toc.refined.yaml --engine openai
+```
+
+### `llm rewrite-pages` (optional)
+
+Rewrite TOC-selected pages into book-first prose (mostly text).
+
+```sh
+sitebookify llm rewrite-pages \
+  --toc toc.yaml \
+  --manifest manifest.jsonl \
+  --out manuscript \
+  --prompt "Summarize concisely in Japanese." \
+  --engine openai
 ```
 
 ### `book init`

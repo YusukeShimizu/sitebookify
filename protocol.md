@@ -17,9 +17,9 @@
 - **Extracted Page**: Raw から本文抽出し、素材化した Markdown。
 - **Manifest**: Extracted Page の台帳（JSONL）。
 - **TOC**: 教科書の章立て（YAML）。
+- **Manuscript**: TOC に採用されたページを「本向け」に書き換えた Markdown 素材。
 - **Book**: mdBook プロジェクト（`book/`）。
 - **Bundled Markdown**: mdBook（`book/`）を 1 ファイルに統合した Markdown（任意のパス）。
-- **Export**: Bundled Markdown から生成した変換成果物（例: `epub`, `pdf`）。
 
 ## ディレクトリ構成（MVP）
 
@@ -31,7 +31,11 @@ raw/
 extracted/
   pages/
     <page_id>.md
+manuscript/ (optional)
+  pages/
+    <page_id>.md
 manifest.jsonl
+manifest.manuscript.jsonl (optional)
 toc.yaml
 book/
   book.toml
@@ -40,9 +44,6 @@ book/
     chapters/
       ch01.md
 book.md (optional)
-book.<LANG>.md (optional)
-book.epub (optional)
-book.pdf (optional)
 ```
 
 ## `raw/crawl.jsonl`
@@ -137,11 +138,13 @@ Bundled Markdown は生成物である。
 - Bundled Markdown の出力先パスは `sitebookify book bundle --out <FILE>` で指定する。
 - 出力ファイルが既に存在する場合は失敗する（上書きしない）。
 
-## Export（`export`）
+## Manuscript（`llm rewrite-pages`）
 
-Export は生成物である。
-Bundled Markdown を入力に、外部ツール（例: `pandoc`）で `epub` / `pdf` 等へ変換する。
+Manuscript は生成物である。
+TOC に採用されたページを対象に、抽出 Markdown（Extracted Page）を「本として読みやすい体裁」に書き換えた素材を出力する。
 
 注意事項は次のとおり。
 
-- 出力ファイルが既に存在する場合は失敗する（上書きしない）。
+- 出力先ディレクトリが既に存在する場合は失敗する（上書きしない）。
+- front matter の `id`, `url`, `retrieved_at`, `raw_html_path` は元の Extracted Page を引き継ぐ。
+- 書き換えはユーザプロンプトに従うが、入力にない事実は追加しない。

@@ -13,7 +13,6 @@ pub enum Command {
     Crawl(CrawlArgs),
     Extract(ExtractArgs),
     Manifest(ManifestArgs),
-    Export(ExportArgs),
     Toc {
         #[command(subcommand)]
         command: TocCommand,
@@ -101,49 +100,57 @@ pub struct BuildArgs {
     #[arg(long = "toc-refine-command-arg")]
     pub toc_refine_command_args: Vec<String>,
 
-    /// Translate bundled Markdown to the target language (e.g. `ja`).
+    /// Rewrite pages into book-first prose using the given prompt.
+    /// When unset, rewrite is skipped and the book is rendered from `extracted/` as-is.
     #[arg(long)]
-    pub translate_to: Option<String>,
+    pub rewrite_prompt: Option<String>,
 
-    /// Translation engine used when `--translate-to` is set.
+    /// Rewrite engine used when `--rewrite-prompt` is set.
     #[arg(long, value_enum, default_value_t = LlmEngine::Openai)]
-    pub translate_engine: LlmEngine,
+    pub rewrite_engine: LlmEngine,
 
-    /// Output file path for translated Markdown (default: `<OUT>/book.<LANG>.md`).
+    /// Output directory for rewritten pages (default: `<OUT>/manuscript`).
     #[arg(long)]
-    pub translate_out: Option<String>,
+    pub rewrite_out: Option<String>,
 
-    /// Translator command (used when translate-engine=command).
+    /// Rewrite command (used when rewrite-engine=command).
     #[arg(long, value_name = "PROGRAM")]
-    pub translate_command: Option<String>,
+    pub rewrite_command: Option<String>,
 
-    /// Translator argument (repeatable, used when translate-engine=command).
-    #[arg(long = "translate-command-arg")]
-    pub translate_command_args: Vec<String>,
+    /// Rewrite command argument (repeatable, used when rewrite-engine=command).
+    #[arg(long = "rewrite-command-arg")]
+    pub rewrite_command_args: Vec<String>,
 
-    /// OpenAI model (used when translate-engine=openai).
+    /// OpenAI model (used when an engine uses OpenAI).
     #[arg(long, default_value = "gpt-5-mini")]
     pub openai_model: String,
 
-    /// OpenAI API base URL (used when translate-engine=openai).
+    /// OpenAI API base URL (used when an engine uses OpenAI).
     #[arg(long, default_value = "https://api.openai.com/v1")]
     pub openai_base_url: String,
 
-    /// Maximum characters per OpenAI request (used when translate-engine=openai).
+    /// Maximum characters per OpenAI request (used when an engine uses OpenAI).
     #[arg(long, default_value_t = 12_000)]
     pub openai_max_chars: usize,
 
-    /// OpenAI temperature (used when translate-engine=openai; ignored for `gpt-5*` models).
+    /// OpenAI temperature (used when an engine uses OpenAI; ignored for `gpt-5*` models).
     #[arg(long, default_value_t = 0.0)]
     pub openai_temperature: f32,
 
-    /// Maximum concurrent OpenAI requests (used when translate-engine=openai).
+    /// Maximum concurrent OpenAI requests (used when an engine uses OpenAI).
     #[arg(long, default_value_t = 1)]
     pub openai_concurrency: usize,
 
-    /// Retries per OpenAI chunk when placeholder tokens are modified (used when translate-engine=openai).
+    /// Retries per OpenAI chunk when placeholder tokens are modified (used by some OpenAI flows).
     #[arg(long, default_value_t = 1)]
     pub openai_retries: usize,
+
+    /// Allow rewritten output even if placeholder tokens are missing.
+    ///
+    /// When enabled, the tool will keep the LLM output and restore only the placeholder tokens
+    /// that remain. This can drop code/URLs if the model removed them.
+    #[arg(long, default_value_t = false)]
+    pub rewrite_allow_missing_tokens: bool,
 }
 
 #[derive(Debug, Args)]
@@ -280,52 +287,14 @@ pub struct BookBundleArgs {
     pub force: bool,
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum ExportFormat {
-    Md,
-    Epub,
-    Pdf,
-}
-
-#[derive(Debug, Args)]
-pub struct ExportArgs {
-    /// Input file path (typically bundled Markdown).
-    #[arg(long = "in")]
-    pub input: String,
-
-    /// Output file path.
-    #[arg(long)]
-    pub out: String,
-
-    /// Output format.
-    #[arg(long, value_enum)]
-    pub format: ExportFormat,
-
-    /// Document title passed to the exporter when supported.
-    #[arg(long)]
-    pub title: Option<String>,
-
-    /// `pandoc` executable path (used for epub/pdf).
-    #[arg(long, default_value = "pandoc")]
-    pub pandoc: String,
-
-    /// PDF engine for pandoc (e.g. `weasyprint`, `tectonic`, `xelatex`).
-    #[arg(long)]
-    pub pdf_engine: Option<String>,
-
-    /// Overwrite output file if it already exists.
-    #[arg(long, default_value_t = false)]
-    pub force: bool,
-}
-
 #[derive(Debug, Subcommand)]
 pub enum LlmCommand {
-    Translate(LlmTranslateArgs),
+    RewritePages(LlmRewritePagesArgs),
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum LlmEngine {
-    /// Do not translate (copy input to output).
+    /// Do nothing (copy input to output).
     Noop,
 
     /// Invoke an external command as a filter (stdin -> stdout).
@@ -336,28 +305,32 @@ pub enum LlmEngine {
 }
 
 #[derive(Debug, Args)]
-pub struct LlmTranslateArgs {
-    /// Input Markdown file path.
-    #[arg(long = "in")]
-    pub input: String,
+pub struct LlmRewritePagesArgs {
+    /// Input path to `toc.yaml` (only referenced page ids are rewritten).
+    #[arg(long)]
+    pub toc: String,
 
-    /// Output Markdown file path.
+    /// Input path to `manifest.jsonl`.
+    #[arg(long)]
+    pub manifest: String,
+
+    /// Output directory for rewritten pages (writes `<OUT>/pages/*.md`).
     #[arg(long)]
     pub out: String,
 
-    /// Target language (passed via `SITEBOOKIFY_TRANSLATE_TO`).
+    /// Rewrite prompt (free-form).
     #[arg(long)]
-    pub to: String,
+    pub prompt: String,
 
-    /// Translation engine.
-    #[arg(long, value_enum, default_value_t = LlmEngine::Command)]
+    /// Rewrite engine.
+    #[arg(long, value_enum, default_value_t = LlmEngine::Openai)]
     pub engine: LlmEngine,
 
-    /// Translator command (required when engine=command).
+    /// Rewrite command (required when engine=command).
     #[arg(long, value_name = "PROGRAM")]
     pub command: Option<String>,
 
-    /// Translator arguments (use `--` before the args).
+    /// Rewrite command arguments (use `--` before the args).
     #[arg(trailing_var_arg = true)]
     pub command_args: Vec<String>,
 
@@ -384,6 +357,13 @@ pub struct LlmTranslateArgs {
     /// Retries per OpenAI chunk when placeholder tokens are modified (used when engine=openai).
     #[arg(long, default_value_t = 1)]
     pub openai_retries: usize,
+
+    /// Allow rewritten output even if placeholder tokens are missing.
+    ///
+    /// When enabled, the tool will keep the LLM output and restore only the placeholder tokens
+    /// that remain. This can drop code/URLs if the model removed them.
+    #[arg(long, default_value_t = false)]
+    pub allow_missing_tokens: bool,
 
     /// Overwrite output file if it already exists.
     #[arg(long, default_value_t = false)]

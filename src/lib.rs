@@ -4,7 +4,6 @@ pub mod book;
 pub mod build;
 pub mod cli;
 pub mod crawl;
-pub mod export;
 pub mod extract;
 pub mod formats;
 pub mod llm;
