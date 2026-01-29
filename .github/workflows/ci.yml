@@ -24,6 +24,8 @@ jobs:
 
       - name: Setup Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@v6
+        with:
+          use-flakehub: false
 
       - name: Run checks
         run: nix develop -c just ci
