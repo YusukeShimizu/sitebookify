@@ -49,7 +49,7 @@
 
 ### GCP Setup（WIF + Artifact Registry の最小手順）
 
-前提:
+前提条件。
 
 - `gcloud` が使えること
 - GCP 側で対象 project を選べること
@@ -114,13 +114,13 @@ gcloud iam service-accounts add-iam-policy-binding "${SA_NAME}@${PROJECT_ID}.iam
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository/${OWNER}/${REPO}"
 ```
 
-GitHub Actions Variables（workflow 側で参照）:
+GitHub Actions Variables（workflow 側で参照）。
 
 - `GCP_PROJECT_ID=${PROJECT_ID}`
 - `GCP_REGION=${REGION}`
 - `GAR_REPOSITORY=${REPO_NAME}`
 - `GCP_SERVICE_ACCOUNT=${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com`
-- `GCP_WORKLOAD_IDENTITY_PROVIDER=projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}`
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`（例: `projects/.../providers/...`）
 
 ## Tests
 
@@ -158,4 +158,4 @@ GitHub Actions Variables（workflow 側で参照）:
 
 - 2026-01-31: ExecPlan 作成（Docker 化 + CI push の到達点を定義）
 - 2026-01-31: `Dockerfile` / `.dockerignore` を追加し、`docker build` と `/healthz` を確認
-- 2026-01-31: GitHub Actions workflow `.github/workflows/image-gcp.yml` を追加（PR は build-only / main+tag は push）
+- 2026-01-31: `.github/workflows/image-gcp.yml` を追加（PR: build-only / main+tag: push）
