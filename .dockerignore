@@ -1,0 +1,15 @@
+.git
+.github
+.direnv
+.vscode
+target
+rust-lib-src
+
+docs
+workspace
+workspace-app
+
+web/node_modules
+web/dist
+web/rust-lib-src
+

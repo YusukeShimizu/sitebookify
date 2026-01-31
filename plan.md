@@ -1,5 +1,6 @@
-以下は、**Rust + gRPC-Web + React + shadcn/ui**で、画像のような「1画面ランディング + URL入力でジョブ開始」UIを作り、**Cloud Run**で運用する前提の“現実的に回る”構成案です。
-（Sitebookify っぽく、入力→ジョブ開始→進捗→成果物DL までを想定しています）
+以下は、**Rust + gRPC-Web + React + shadcn/ui**で UI を作るための構成案です。  
+画像のように「1画面ランディング + URL入力でジョブ開始」の導線を想定します。  
+運用先は **Cloud Run** を想定します（入力 → ジョブ開始 → 進捗 → 成果物DL まで）。
 
 ---
 
@@ -24,7 +25,7 @@
                                   [GCS Bucket]
 ```
 
-* **Web**: React + shadcn/ui（静的配信でもSSRでもOK）
+* **Web**: React + shadcn/ui（静的配信 / SSR のどちらでも可）
 * **API**: Rust（tonic）で **gRPC** を提供しつつ、ブラウザ用に **gRPC-Web** を有効化
 * **Worker**: クロール＆レンダリング等の重処理（タイムアウト/メモリ/CPUをここに寄せる）
 * **Firestore**: job状態（queued/running/done/error）、進捗、成果物パス
@@ -32,7 +33,7 @@
 
 ---
 
-## 2) gRPC-Web どうする？（Rust側は Envoy不要にできる）
+## 2) gRPC-Web の方針（Rust側は Envoy不要にできる）
 
 ### 推奨：`tonic-web` で Rust 単体で gRPC-Web 対応
 
@@ -212,7 +213,7 @@ message GetDownloadUrlResponse { string url = 1; uint32 expires_sec = 2; }
 * `job`（GetJob/WatchJobで更新）
 * `downloadUrl`（DONEになったら取得）
 
-進捗の取り方は2案：
+進捗の取り方は 2 案あります。
 
 * **案A（堅実）**：`GetJob` を数秒ごとにポーリング（実装簡単）
 * **案B（リッチ）**：`WatchJob` を server streaming（gRPC-Webでストリーム対応が必要）
@@ -258,10 +259,13 @@ message GetDownloadUrlResponse { string url = 1; uint32 expires_sec = 2; }
 
 ---
 
-もしよければ、次のどれか1つだけ教えてください（確認というより、最適案を選ぶための前提です。答えがなくても上の構成で進められます）：
+もしよければ、次のどれか 1 つだけ教えてください。  
+確認というより、最適案を選ぶための前提です。  
+答えがなくても上の構成で進められます。
 
-* **成果物はPDFのみ**？それとも **EPUBも必須**？
-* クロールは「同一ドメイン配下のみ」など制限したい？
-* 進捗は「バー表示が欲しい」 or 「完了通知だけでOK」？
+* **成果物は PDF のみ** / **EPUB も必須**
+* クロールは「同一ドメイン配下のみ」など制限したい
+* 進捗は「バー表示が欲しい」 or 「完了通知だけでOK」
 
-不要なら、このまま **(1) Buf設定例 + (2) tonic-web付きRust起動コード骨子 + (3) React(shadcn)のHero/CommandInputの雛形**まで一気に具体化して提示できます。
+不要なら、このまま (1) Buf 設定例、(2) tonic-web 付き Rust 起動コードの骨子、(3) React(shadcn) の雛形まで具体化できます。  
+必要なら、次の返答でまとめて提示します。

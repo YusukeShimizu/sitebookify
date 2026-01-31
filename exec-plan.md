@@ -1,7 +1,8 @@
 # Sitebookify Web MVP – Execution Plan（Local-first / Cloud Run-ready / gRPC-Web）
 
-この `exec-plan.md` は `plan.md` を元に、**将来的に “1つの Cloud Run サービスに全部入り” でデプロイできる**将来性を見越しつつ、  
-**まずは全部ローカル（Nix）で動く MVP**を最短で作るための実行計画です。  
+この `exec-plan.md` は `plan.md` を元にした実行計画です。  
+将来的に「1つの Cloud Run サービスに全部入り」でデプロイできる形を意識しつつ、  
+まずはローカル（Nix）で動く MVP を最短で作ります。  
 ブラウザからの呼び出しは **gRPC（= ブラウザ都合で gRPC-Web）**を採用します。
 
 ---
@@ -176,7 +177,7 @@ MVP は `engine=noop` をデフォルトにする。
 ## 6. 次フェーズ（育ったら）
 
 - `WatchJob`（server streaming）導入
-- 並列数制御（in-process の同時実行数制限 → Cloud Tasks の rate/dispatch に移行）
+- 並列数制御（in-process の同時実行数の上限 → Cloud Tasks の rate/dispatch に移行）
 - 認証（IAP / OAuth）導入
 - LLM エンジンのサーバ実装（Secret Manager・レート制限・監査ログ）
   - 必要なら、このタイミングで Worker を別サービス/Jobs に分離してスケール特性を分ける（任意）

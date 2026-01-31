@@ -45,6 +45,25 @@ nix develop -c cargo build --release
 nix develop -c cargo test --all
 ```
 
+## Docker（sitebookify-app）
+
+ローカルで Web MVP を 1 コンテナで動かしたい場合は `sitebookify-app` を Docker で起動できる。
+
+```sh
+docker build -t sitebookify-app:local .
+docker run --rm -p 8080:8080 sitebookify-app:local
+```
+
+ヘルスチェック（例）。
+
+```sh
+curl -fsS http://127.0.0.1:8080/healthz
+```
+
+`sitebookify-app` はデータ保存先として、デフォルトで `workspace-app/` を使う。  
+コンテナでは `CMD` で `/tmp/workspace-app` を指定している。  
+Cloud Run などの read-only FS を想定している。
+
 ## rust-analyzer（VS Code）
 
 rust-analyzer が標準ライブラリ（`std`）を解析できるように、次を設定する。
@@ -189,3 +208,47 @@ Mintlify で動かすことを前提に、ドキュメントは `docs/` 配下�
 - Vale: `docs/.vale.ini`
 
 CI では `just ci` がドキュメントの検査も実行する。
+
+## CI: GCP Artifact Registry へ Docker image を push
+
+GitHub Actions から GCP Artifact Registry に `sitebookify-app` のイメージを push する workflow を用意している。
+
+- Workflow: `.github/workflows/image-gcp.yml`
+- 認証: GitHub OIDC → GCP Workload Identity Federation（鍵ファイル不要）
+
+GitHub Actions Variables で次を設定する。  
+設定場所: Repository Settings → Secrets and variables → Actions → Variables。
+
+- `GCP_PROJECT_ID`
+- `GCP_REGION`（例: `asia-northeast1`）
+- `GAR_REPOSITORY`（Artifact Registry のリポジトリ名）
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`（Workload Identity Provider のリソース名）
+- `GCP_SERVICE_ACCOUNT`（例: `github-actions@<project>.iam.gserviceaccount.com`）
+
+GCP 側のセットアップ例（概略）。
+
+```sh
+# 例: 事前に gcloud auth login 済み
+PROJECT_ID="<your-project-id>"
+REGION="<your-region>" # e.g. asia-northeast1
+REPO_NAME="<your-ar-repo>" # e.g. sitebookify
+SA_NAME="github-actions"
+
+gcloud services enable artifactregistry.googleapis.com iamcredentials.googleapis.com iam.googleapis.com sts.googleapis.com
+
+gcloud artifacts repositories create "${REPO_NAME}" \
+  --repository-format=docker \
+  --location="${REGION}"
+gcloud iam service-accounts create "${SA_NAME}" \
+  --project "${PROJECT_ID}"
+
+gcloud artifacts repositories add-iam-policy-binding "${REPO_NAME}" \
+  --location "${REGION}" \
+  --member "serviceAccount:${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role "roles/artifactregistry.writer"
+```
+
+Workload Identity Federation の手順は構成に依存する。  
+`google-github-actions/auth` のドキュメントに従って設定する。  
+GitHub OIDC 発行者（`https://token.actions.githubusercontent.com`）を許可する。  
+対象リポジトリ（`<owner>/<repo>`）から `GCP_SERVICE_ACCOUNT` を impersonate できるように設定する。
