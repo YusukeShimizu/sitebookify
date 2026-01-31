@@ -49,6 +49,7 @@
         devShells.default = pkgs.mkShell {
           packages =
             (with pkgs; [
+              api-linter
               buf
               cargo
               clippy

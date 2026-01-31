@@ -4,6 +4,10 @@ package sitebookify.v1;
 
 import "buf/validate/validate.proto";
 
+option java_multiple_files = true;
+option java_outer_classname = "ManifestProto";
+option java_package = "com.sitebookify.v1";
+
 // ManifestRecord is a single line (JSONL) record in `manifest.jsonl`.
 //
 // It is derived from Extracted Pages under `extracted/pages/*.md`.

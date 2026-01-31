@@ -7,6 +7,9 @@ proto_fmt:
 proto_lint:
     buf lint
 
+aip_lint:
+    tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT; buf build --as-file-descriptor-set -o "$tmp"; api-linter --set-exit-status --output-format summary --descriptor-set-in "$tmp" -I proto sitebookify/v1/service.proto sitebookify/v1/manifest.proto sitebookify/v1/toc.proto
+
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
@@ -23,7 +26,7 @@ docs_vale:
     cd docs && vale sync --config .vale.ini
     cd docs && vale --config .vale.ini --glob='*.mdx' .
 
-ci: fmt proto_fmt proto_lint clippy test textlint docs_vale docs_links
+ci: fmt proto_fmt proto_lint aip_lint clippy test textlint docs_vale docs_links
 
 # --- Local Web MVP (optional) ---
 

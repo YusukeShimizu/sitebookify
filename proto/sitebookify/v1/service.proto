@@ -2,72 +2,435 @@ syntax = "proto3";
 
 package sitebookify.v1;
 
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "google/api/client.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/longrunning/operations.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_outer_classname = "ServiceProto";
+option java_package = "com.sitebookify.v1";
+
+// SitebookifyService provides a resource-oriented API for running crawl jobs.
+//
+// This API is designed for both gRPC and REST (via `google.api.http`) and
+// supports long-running operations for asynchronous processing.
 service SitebookifyService {
-  rpc StartCrawl(StartCrawlRequest) returns (StartCrawlResponse);
-  rpc GetJob(GetJobRequest) returns (Job);
-  rpc GetDownloadUrl(GetDownloadUrlRequest) returns (GetDownloadUrlResponse);
+  // Creates a crawl job.
+  //
+  // A crawl job crawls a website starting at the given URL and produces a
+  // downloadable artifact (for example, a `.zip` containing `book.md` and
+  // `assets/`).
+  //
+  // This is a long-running operation.
+  //
+  // HTTP:
+  // - POST /v1/jobs
+  // - body: "job"
+  //
+  // Success:
+  // - Returns an `Operation` which is done when the job finishes.
+  // - The operation response type is `Job`.
+  //
+  // Errors:
+  // - `INVALID_ARGUMENT` if `job.spec.source_url` is invalid.
+  rpc CreateJob(CreateJobRequest) returns (google.longrunning.Operation) {
+    option (google.api.http) = {
+      post: "/v1/jobs"
+      body: "job"
+    };
+    option (google.api.method_signature) = "job,job_id";
+    option (google.longrunning.operation_info) = {
+      response_type: "Job"
+      metadata_type: "CreateJobMetadata"
+    };
+  }
+
+  // Gets a job.
+  //
+  // HTTP:
+  // - GET /v1/{name=jobs/*}
+  //
+  // Success:
+  // - Returns the requested `Job`.
+  //
+  // Errors:
+  // - `NOT_FOUND` if the job does not exist.
+  rpc GetJob(GetJobRequest) returns (Job) {
+    option (google.api.http) = {get: "/v1/{name=jobs/*}"};
+    option (google.api.method_signature) = "name";
+  }
+
+  // Lists jobs.
+  //
+  // HTTP:
+  // - GET /v1/jobs
+  //
+  // Success:
+  // - Returns a page of `Job` resources.
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse) {
+    option (google.api.http) = {get: "/v1/jobs"};
+  }
+
+  // Generates a temporary download URL for the job artifact.
+  //
+  // This is a custom method (AIP-136) because the returned URL is ephemeral and
+  // not modeled as a first-class resource.
+  //
+  // HTTP:
+  // - POST /v1/{name=jobs/*}:generateDownloadUrl
+  // - body: "*"
+  //
+  // Success:
+  // - Returns a URL that can be used to download the generated artifact.
+  //
+  // Errors:
+  // - `NOT_FOUND` if the job does not exist.
+  // - `FAILED_PRECONDITION` if the artifact is not ready.
+  rpc GenerateJobDownloadUrl(GenerateJobDownloadUrlRequest) returns (GenerateJobDownloadUrlResponse) {
+    option (google.api.http) = {
+      post: "/v1/{name=jobs/*}:generateDownloadUrl"
+      body: "*"
+    };
+  }
 }
 
-message StartCrawlRequest {
+// Request message for `CreateJob`.
+message CreateJobRequest {
+  // The job to create.
+  //
+  // Notes:
+  // - `job.name` is ignored and assigned by the server.
+  Job job = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true
+  ];
+
+  // Client-provided job identifier.
+  //
+  // This value is used as the `{job}` segment in the resource name `jobs/{job}`.
+  //
+  // Notes:
+  // - If unset (empty), the server assigns an ID.
+  string job_id = 2 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 36,
+    (buf.validate.field).string.pattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+  ];
+}
+
+// Metadata for the `CreateJob` long-running operation.
+message CreateJobMetadata {
+  // Resource name of the job.
+  //
+  // Format:
+  // - `jobs/{job}`
+  string job = 1 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference) = {type: "sitebookify.googleapis.com/Job"},
+    (buf.validate.field).string.pattern = "^jobs/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+  ];
+
+  // Creation time of the operation.
+  google.protobuf.Timestamp create_time = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Start time of the operation.
+  google.protobuf.Timestamp start_time = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Completion time of the operation.
+  google.protobuf.Timestamp completion_time = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Progress percentage.
+  //
+  // Notes:
+  // - Range: `0..=100`
+  int32 progress_percent = 5 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).int32.gte = 0,
+    (buf.validate.field).int32.lte = 100
+  ];
+
+  // Human-readable progress message.
+  string message = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Request message for `GetJob`.
+message GetJobRequest {
+  // Resource name of the job.
+  //
+  // Format:
+  // - `jobs/{job}`
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "sitebookify.googleapis.com/Job"},
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^jobs/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+  ];
+}
+
+// Request message for `ListJobs`.
+message ListJobsRequest {
+  // The maximum number of jobs to return.
+  //
+  // Notes:
+  // - The server may return fewer items than requested.
+  int32 page_size = 1 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).int32.gte = 0,
+    (buf.validate.field).int32.lte = 1000
+  ];
+
+  // A page token, received from a previous `ListJobs` call.
+  string page_token = 2 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE
+  ];
+
+  // An AIP-160 filter string.
+  string filter = 3 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 1024
+  ];
+
+  // An AIP-132 order by string.
+  string order_by = 4 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 1024
+  ];
+}
+
+// Response message for `ListJobs`.
+message ListJobsResponse {
+  // The jobs from the requested page.
+  repeated Job jobs = 1;
+
+  // A token that can be sent as `page_token` to retrieve the next page.
+  string next_page_token = 2;
+}
+
+// Request message for `GenerateJobDownloadUrl`.
+message GenerateJobDownloadUrlRequest {
+  // Resource name of the job.
+  //
+  // Format:
+  // - `jobs/{job}`
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "sitebookify.googleapis.com/Job"},
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^jobs/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+  ];
+}
+
+// Response message for `GenerateJobDownloadUrl`.
+message GenerateJobDownloadUrlResponse {
+  // Download URL for the artifact.
+  //
+  // Notes:
+  // - The URL is typically short-lived.
   string url = 1;
+
+  // Time when the URL expires, if applicable.
+  google.protobuf.Timestamp expire_time = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Job represents an asynchronous crawl job.
+message Job {
+  option (google.api.resource) = {
+    type: "sitebookify.googleapis.com/Job"
+    pattern: "jobs/{job}"
+    singular: "job"
+    plural: "jobs"
+  };
+
+  // Resource name of the job.
+  //
+  // Format:
+  // - `jobs/{job}`
+  string name = 1 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).string.pattern = "^jobs/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+  ];
+
+  // Immutable job specification provided at creation time.
+  JobSpec spec = 2 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).required = true
+  ];
+
+  // Current lifecycle state of the job.
+  State state = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Progress percentage.
+  //
+  // Notes:
+  // - Range: `0..=100`
+  int32 progress_percent = 4 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).int32.gte = 0,
+    (buf.validate.field).int32.lte = 100
+  ];
+
+  // Human-readable progress message.
+  string message = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Creation time of the job.
+  google.protobuf.Timestamp create_time = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Start time of the job (unset until the job starts running).
+  google.protobuf.Timestamp start_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Completion time of the job (unset until the job finishes).
+  google.protobuf.Timestamp completion_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Stable URI of the artifact, when available.
+  //
+  // Examples:
+  // - `gs://bucket/path/to/artifact.zip`
+  // - `file:///var/lib/sitebookify/jobs/<uuid>/artifact.zip`
+  string artifact_uri = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // State of the job.
+  enum State {
+    // The job state is unspecified.
+    STATE_UNSPECIFIED = 0;
+
+    // The job has been accepted but has not started yet.
+    STATE_QUEUED = 1;
+
+    // The job is currently running.
+    STATE_RUNNING = 2;
+
+    // The job finished successfully.
+    STATE_DONE = 3;
+
+    // The job finished with an error.
+    STATE_ERROR = 4;
+  }
+}
+
+// JobSpec is the immutable specification for a job.
+message JobSpec {
+  // Starting URL to crawl.
+  //
+  // Format:
+  // - `https://example.com/docs/`
+  string source_url = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 2048,
+    (buf.validate.field).string.pattern = "^https?://"
+  ];
 
   // Optional title override for the generated book.
-  string title = 2;
+  //
+  // Notes:
+  // - When unset (empty), the server may choose a title automatically.
+  string title = 2 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 256
+  ];
 
-  // Crawl options (defaults are server-side).
-  uint32 max_pages = 3;
-  uint32 max_depth = 4;
-  uint32 concurrency = 5;
-  uint32 delay_ms = 6;
+  // Maximum number of pages to crawl.
+  //
+  // Notes:
+  // - When unset (`0`), the server uses its default.
+  int32 max_pages = 3 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).int32.gte = 1,
+    (buf.validate.field).int32.lte = 10000
+  ];
 
-  // Book rendering options.
-  string language = 7;
-  string tone = 8;
+  // Maximum depth from the starting URL.
+  //
+  // Notes:
+  // - When unset (`0`), the server uses its default.
+  int32 max_depth = 4 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).int32.gte = 1,
+    (buf.validate.field).int32.lte = 128
+  ];
 
-  // Engines:
-  // - "noop" is deterministic (no LLM).
-  // - others are reserved for future server-side engines.
-  string toc_engine = 9;
-  string render_engine = 10;
+  // Maximum concurrent fetches.
+  //
+  // Notes:
+  // - When unset (`0`), the server uses its default.
+  int32 concurrency = 5 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).int32.gte = 1,
+    (buf.validate.field).int32.lte = 256
+  ];
+
+  // Delay between requests.
+  //
+  // Notes:
+  // - When unset, the server uses its default.
+  google.protobuf.Duration request_delay = 6 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).duration.gte = {seconds: 0},
+    (buf.validate.field).duration.lte = {seconds: 600}
+  ];
+
+  // Output language for the generated book.
+  //
+  // Notes:
+  // - When unset (empty), the server uses its default.
+  string language_code = 7 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 64
+  ];
+
+  // Output tone for the generated book.
+  //
+  // Notes:
+  // - When unset (empty), the server uses its default.
+  string tone = 8 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 64
+  ];
+
+  // Engine for generating the table of contents.
+  //
+  // Notes:
+  // - When unset (`ENGINE_UNSPECIFIED`), the server uses its default.
+  Engine toc_engine = 9 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).enum.defined_only = true
+  ];
+
+  // Engine for rendering the book content.
+  //
+  // Notes:
+  // - When unset (`ENGINE_UNSPECIFIED`), the server uses its default.
+  Engine render_engine = 10 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).enum.defined_only = true
+  ];
 }
 
-message StartCrawlResponse {
-  string job_id = 1;
-}
+// Engine identifies the implementation used for TOC generation or rendering.
+enum Engine {
+  // The engine is unspecified.
+  ENGINE_UNSPECIFIED = 0;
 
-message GetJobRequest {
-  string job_id = 1;
-}
+  // Deterministic (no LLM).
+  ENGINE_NOOP = 1;
 
-message GetDownloadUrlRequest {
-  string job_id = 1;
-}
-
-message GetDownloadUrlResponse {
-  // Download URL for the artifact.
-  string url = 1;
-
-  // Expiration seconds (0 if not applicable).
-  uint32 expires_sec = 2;
-}
-
-message Job {
-  string job_id = 1;
-
-  JobStatus status = 2;
-
-  // 0..=100
-  uint32 progress_percent = 3;
-  string message = 4;
-
-  // Present when status is DONE.
-  string artifact_url = 5;
-}
-
-enum JobStatus {
-  JOB_STATUS_UNSPECIFIED = 0;
-  JOB_STATUS_QUEUED = 1;
-  JOB_STATUS_RUNNING = 2;
-  JOB_STATUS_DONE = 3;
-  JOB_STATUS_ERROR = 4;
+  // Uses an LLM via Codex (server-side).
+  ENGINE_CODEX = 2;
 }

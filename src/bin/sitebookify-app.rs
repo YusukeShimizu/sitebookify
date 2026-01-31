@@ -24,12 +24,22 @@ use sitebookify::app::model::{Job, JobStatus, StartJobRequest};
 use sitebookify::app::queue::InProcessQueue;
 use sitebookify::app::runner::{JobRunner, default_job_work_dir};
 use sitebookify::cli::LlmEngine;
+use sitebookify::google::longrunning::operations_server::{
+    Operations as LongrunningOperations, OperationsServer as LongrunningOperationsServer,
+};
+use sitebookify::google::longrunning::{
+    CancelOperationRequest, DeleteOperationRequest, GetOperationRequest, ListOperationsRequest,
+    ListOperationsResponse, Operation,
+};
+use sitebookify::google::rpc::Status as RpcStatus;
+use sitebookify::grpc::v1::job::State as PbJobState;
 use sitebookify::grpc::v1::sitebookify_service_server::{
     SitebookifyService, SitebookifyServiceServer,
 };
 use sitebookify::grpc::v1::{
-    GetDownloadUrlRequest, GetDownloadUrlResponse, GetJobRequest, Job as PbJob,
-    JobStatus as PbJobStatus, StartCrawlRequest, StartCrawlResponse,
+    CreateJobMetadata, CreateJobRequest, Engine, GenerateJobDownloadUrlRequest,
+    GenerateJobDownloadUrlResponse, GetJobRequest, Job as PbJob, JobSpec, ListJobsRequest,
+    ListJobsResponse,
 };
 
 #[derive(Debug, Parser)]
@@ -111,10 +121,38 @@ async fn try_main() -> anyhow::Result<()> {
         ))
         .service(grpc_service);
 
+    let ops_impl = GrpcOperations {
+        state: state.clone(),
+    };
+    let ops_service = tonic::transport::Server::builder()
+        .accept_http1(true)
+        .add_service(tonic_web::enable(LongrunningOperationsServer::new(
+            ops_impl,
+        )))
+        .into_service();
+    let ops_service = ServiceBuilder::new()
+        .map_request(|req: axum::http::Request<axum::body::Body>| {
+            let (parts, body) = req.into_parts();
+            let body = body
+                .map_err(|err| Status::internal(err.to_string()))
+                .boxed_unsync();
+            axum::http::Request::from_parts(parts, body)
+        })
+        .layer(HandleErrorLayer::new(
+            |err: Box<dyn std::error::Error + Send + Sync>| async move {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("gRPC error: {err}"),
+                )
+            },
+        ))
+        .service(ops_service);
+
     let mut app = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/artifacts/:job_id", get(download_artifact))
         .route_service("/sitebookify.v1.SitebookifyService/*rest", grpc_service)
+        .route_service("/google.longrunning.Operations/*rest", ops_service)
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -195,41 +233,69 @@ struct GrpcSitebookifyService {
 
 #[tonic::async_trait]
 impl SitebookifyService for GrpcSitebookifyService {
-    async fn start_crawl(
+    async fn create_job(
         &self,
-        request: Request<StartCrawlRequest>,
-    ) -> Result<TonicResponse<StartCrawlResponse>, Status> {
+        request: Request<CreateJobRequest>,
+    ) -> Result<TonicResponse<Operation>, Status> {
         let req = request.into_inner();
-        if req.url.trim().is_empty() {
-            return Err(Status::invalid_argument("url is required"));
+
+        let Some(job) = req.job else {
+            return Err(Status::invalid_argument("job is required"));
+        };
+        let Some(spec) = job.spec else {
+            return Err(Status::invalid_argument("job.spec is required"));
+        };
+
+        let job_id = if req.job_id.trim().is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            let job_id = req.job_id.trim();
+            uuid::Uuid::parse_str(job_id)
+                .map_err(|err| Status::invalid_argument(format!("invalid job_id: {err}")))?;
+            job_id.to_string()
+        };
+
+        if spec.source_url.trim().is_empty() {
+            return Err(Status::invalid_argument("job.spec.source_url is required"));
         }
-        let url = url::Url::parse(req.url.trim())
-            .map_err(|err| Status::invalid_argument(format!("invalid url: {err}")))?;
+        let url = url::Url::parse(spec.source_url.trim()).map_err(|err| {
+            Status::invalid_argument(format!("invalid job.spec.source_url: {err}"))
+        })?;
         if url.scheme() != "http" && url.scheme() != "https" {
-            return Err(Status::invalid_argument("url must be http/https"));
+            return Err(Status::invalid_argument(
+                "job.spec.source_url must be http/https",
+            ));
         }
 
-        let job_id = uuid::Uuid::new_v4().to_string();
         let work_dir = default_job_work_dir(&self.state.base_dir, &job_id);
+
+        let delay_ms = match spec.request_delay {
+            None => StartJobRequest::default_delay_ms(),
+            Some(delay) => duration_to_ms(&delay).map_err(Status::invalid_argument)?,
+        };
 
         let start_request = StartJobRequest {
             url: url.to_string(),
-            title: req.title.trim().to_string().into_option(),
-            max_pages: usize_from_u32_or_default(
-                req.max_pages,
+            title: spec.title.trim().to_string().into_option(),
+            max_pages: i32_as_usize_or_default(
+                spec.max_pages,
                 StartJobRequest::default_max_pages(),
-            ),
-            max_depth: u32_or_default(req.max_depth, StartJobRequest::default_max_depth()),
-            concurrency: usize_from_u32_or_default(
-                req.concurrency,
+            )
+            .map_err(Status::invalid_argument)?,
+            max_depth: i32_as_u32_or_default(spec.max_depth, StartJobRequest::default_max_depth())
+                .map_err(Status::invalid_argument)?,
+            concurrency: i32_as_usize_or_default(
+                spec.concurrency,
                 StartJobRequest::default_concurrency(),
-            ),
-            delay_ms: u64_from_u32_or_default(req.delay_ms, StartJobRequest::default_delay_ms()),
-            language: string_or_default(req.language, StartJobRequest::default_language()),
-            tone: string_or_default(req.tone, StartJobRequest::default_tone()),
-            toc_engine: parse_engine(req.toc_engine).unwrap_or(StartJobRequest::default_engine()),
-            render_engine: parse_engine(req.render_engine)
-                .unwrap_or(StartJobRequest::default_engine()),
+            )
+            .map_err(Status::invalid_argument)?,
+            delay_ms,
+            language: string_or_default(spec.language_code, StartJobRequest::default_language()),
+            tone: string_or_default(spec.tone, StartJobRequest::default_tone()),
+            toc_engine: engine_or_default(spec.toc_engine, StartJobRequest::default_engine())
+                .map_err(Status::invalid_argument)?,
+            render_engine: engine_or_default(spec.render_engine, StartJobRequest::default_engine())
+                .map_err(Status::invalid_argument)?,
         };
 
         let job = Job {
@@ -256,14 +322,35 @@ impl SitebookifyService for GrpcSitebookifyService {
             runner.run_job(&job_id_for_task).await;
         });
 
-        Ok(TonicResponse::new(StartCrawlResponse { job_id }))
+        let now = chrono::Utc::now();
+        let metadata = CreateJobMetadata {
+            job: job_name(&job_id),
+            create_time: Some(timestamp_from_chrono(now)),
+            start_time: None,
+            completion_time: None,
+            progress_percent: 0,
+            message: "queued".to_string(),
+        };
+
+        let op = Operation {
+            name: operation_name(&job_id),
+            metadata: Some(pack_any(
+                "type.googleapis.com/sitebookify.v1.CreateJobMetadata",
+                &metadata,
+            )),
+            done: false,
+            result: None,
+        };
+
+        Ok(TonicResponse::new(op))
     }
 
     async fn get_job(
         &self,
         request: Request<GetJobRequest>,
     ) -> Result<TonicResponse<PbJob>, Status> {
-        let job_id = request.into_inner().job_id;
+        let job_id =
+            job_id_from_name(&request.into_inner().name).map_err(Status::invalid_argument)?;
         let Some(job) = self
             .state
             .job_store
@@ -274,14 +361,96 @@ impl SitebookifyService for GrpcSitebookifyService {
             return Err(Status::not_found("job not found"));
         };
 
-        Ok(TonicResponse::new(job_to_pb(&job, &job_id)))
+        let Some(start_request) = self
+            .state
+            .job_store
+            .get_request(&job_id)
+            .await
+            .map_err(|err| Status::internal(format!("get job request: {err:#}")))?
+        else {
+            return Err(Status::internal("job request not found"));
+        };
+
+        Ok(TonicResponse::new(job_to_pb(&job, &start_request)))
     }
 
-    async fn get_download_url(
+    async fn list_jobs(
         &self,
-        request: Request<GetDownloadUrlRequest>,
-    ) -> Result<TonicResponse<GetDownloadUrlResponse>, Status> {
-        let job_id = request.into_inner().job_id;
+        request: Request<ListJobsRequest>,
+    ) -> Result<TonicResponse<ListJobsResponse>, Status> {
+        let req = request.into_inner();
+        if !req.filter.trim().is_empty() || !req.order_by.trim().is_empty() {
+            tracing::warn!(
+                filter = req.filter,
+                order_by = req.order_by,
+                "ListJobs filter/order_by are ignored in the local implementation"
+            );
+        }
+
+        let mut job_ids = list_local_job_ids(&self.state.base_dir)
+            .await
+            .map_err(|err| Status::internal(format!("list jobs: {err:#}")))?;
+        job_ids.sort();
+
+        let page_size = if req.page_size <= 0 {
+            100
+        } else {
+            req.page_size as usize
+        };
+        let start_index = if req.page_token.trim().is_empty() {
+            0
+        } else {
+            let token = req.page_token.trim();
+            let pos = job_ids
+                .iter()
+                .position(|id| id == token)
+                .ok_or_else(|| Status::invalid_argument("invalid page_token"))?;
+            pos + 1
+        };
+
+        let mut jobs = Vec::new();
+        for job_id in job_ids.iter().skip(start_index).take(page_size) {
+            let Some(job) = self
+                .state
+                .job_store
+                .get(job_id)
+                .await
+                .map_err(|err| Status::internal(format!("get job: {err:#}")))?
+            else {
+                continue;
+            };
+            let Some(start_request) = self
+                .state
+                .job_store
+                .get_request(job_id)
+                .await
+                .map_err(|err| Status::internal(format!("get job request: {err:#}")))?
+            else {
+                continue;
+            };
+            jobs.push(job_to_pb(&job, &start_request));
+        }
+
+        let next_page_token = if jobs.len() == page_size {
+            jobs.last()
+                .map(|j| j.name.strip_prefix("jobs/").unwrap_or_default().to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        Ok(TonicResponse::new(ListJobsResponse {
+            jobs,
+            next_page_token,
+        }))
+    }
+
+    async fn generate_job_download_url(
+        &self,
+        request: Request<GenerateJobDownloadUrlRequest>,
+    ) -> Result<TonicResponse<GenerateJobDownloadUrlResponse>, Status> {
+        let job_id =
+            job_id_from_name(&request.into_inner().name).map_err(Status::invalid_argument)?;
         let Some(job) = self
             .state
             .job_store
@@ -296,45 +465,253 @@ impl SitebookifyService for GrpcSitebookifyService {
             return Err(Status::failed_precondition("artifact not ready"));
         }
 
-        Ok(TonicResponse::new(GetDownloadUrlResponse {
+        Ok(TonicResponse::new(GenerateJobDownloadUrlResponse {
             url: format!("/artifacts/{job_id}"),
-            expires_sec: 0,
+            expire_time: None,
         }))
     }
 }
 
-fn job_to_pb(job: &Job, job_id: &str) -> PbJob {
-    let status = match job.status {
-        JobStatus::Queued => PbJobStatus::Queued as i32,
-        JobStatus::Running => PbJobStatus::Running as i32,
-        JobStatus::Done => PbJobStatus::Done as i32,
-        JobStatus::Error => PbJobStatus::Error as i32,
-    };
+#[derive(Clone)]
+struct GrpcOperations {
+    state: AppState,
+}
 
-    let artifact_url = if job.status == JobStatus::Done && job.artifact_path.is_some() {
-        format!("/artifacts/{job_id}")
-    } else {
-        String::new()
-    };
+#[tonic::async_trait]
+impl LongrunningOperations for GrpcOperations {
+    async fn list_operations(
+        &self,
+        _request: Request<ListOperationsRequest>,
+    ) -> Result<TonicResponse<ListOperationsResponse>, Status> {
+        Err(Status::unimplemented("ListOperations is not implemented"))
+    }
 
-    PbJob {
-        job_id: job.job_id.clone(),
-        status,
-        progress_percent: job.progress_percent,
-        message: job.message.clone(),
-        artifact_url,
+    async fn get_operation(
+        &self,
+        request: Request<GetOperationRequest>,
+    ) -> Result<TonicResponse<Operation>, Status> {
+        let name = request.into_inner().name;
+        let job_id = job_id_from_operation_name(&name).map_err(Status::invalid_argument)?;
+
+        let Some(job) = self
+            .state
+            .job_store
+            .get(&job_id)
+            .await
+            .map_err(|err| Status::internal(format!("get job: {err:#}")))?
+        else {
+            return Err(Status::not_found("operation not found"));
+        };
+        let Some(start_request) = self
+            .state
+            .job_store
+            .get_request(&job_id)
+            .await
+            .map_err(|err| Status::internal(format!("get job request: {err:#}")))?
+        else {
+            return Err(Status::internal("job request not found"));
+        };
+
+        let metadata = CreateJobMetadata {
+            job: job_name(&job_id),
+            create_time: Some(timestamp_from_chrono(job.created_at)),
+            start_time: job.started_at.map(timestamp_from_chrono),
+            completion_time: job.finished_at.map(timestamp_from_chrono),
+            progress_percent: job.progress_percent as i32,
+            message: job.message.clone(),
+        };
+
+        let done = matches!(job.status, JobStatus::Done | JobStatus::Error);
+        let result = match job.status {
+            JobStatus::Done => {
+                let pb_job = job_to_pb(&job, &start_request);
+                Some(
+                    sitebookify::google::longrunning::operation::Result::Response(pack_any(
+                        "type.googleapis.com/sitebookify.v1.Job",
+                        &pb_job,
+                    )),
+                )
+            }
+            JobStatus::Error => Some(sitebookify::google::longrunning::operation::Result::Error(
+                RpcStatus {
+                    code: 13, // INTERNAL
+                    message: job.message.clone(),
+                    details: Vec::new(),
+                },
+            )),
+            JobStatus::Queued | JobStatus::Running => None,
+        };
+
+        Ok(TonicResponse::new(Operation {
+            name,
+            metadata: Some(pack_any(
+                "type.googleapis.com/sitebookify.v1.CreateJobMetadata",
+                &metadata,
+            )),
+            done,
+            result,
+        }))
+    }
+
+    async fn delete_operation(
+        &self,
+        _request: Request<DeleteOperationRequest>,
+    ) -> Result<TonicResponse<()>, Status> {
+        Err(Status::unimplemented("DeleteOperation is not implemented"))
+    }
+
+    async fn cancel_operation(
+        &self,
+        _request: Request<CancelOperationRequest>,
+    ) -> Result<TonicResponse<()>, Status> {
+        Err(Status::unimplemented("CancelOperation is not implemented"))
+    }
+
+    async fn wait_operation(
+        &self,
+        _request: Request<sitebookify::google::longrunning::WaitOperationRequest>,
+    ) -> Result<TonicResponse<Operation>, Status> {
+        Err(Status::unimplemented("WaitOperation is not implemented"))
     }
 }
 
-fn parse_engine(value: String) -> Option<LlmEngine> {
-    match value.trim().to_lowercase().as_str() {
-        "" => None,
-        "noop" => Some(LlmEngine::Noop),
-        "codex" => Some(LlmEngine::Codex),
-        other => {
-            tracing::warn!(engine = other, "unknown engine; falling back to default");
-            None
+fn job_to_pb(job: &Job, start_request: &StartJobRequest) -> PbJob {
+    let state = match job.status {
+        JobStatus::Queued => PbJobState::Queued as i32,
+        JobStatus::Running => PbJobState::Running as i32,
+        JobStatus::Done => PbJobState::Done as i32,
+        JobStatus::Error => PbJobState::Error as i32,
+    };
+
+    let artifact_uri = job
+        .artifact_path
+        .as_ref()
+        .map(|p| format!("file://{}", p.display()))
+        .unwrap_or_default();
+
+    PbJob {
+        name: job_name(&job.job_id),
+        spec: Some(job_spec_to_pb(start_request)),
+        state,
+        progress_percent: job.progress_percent as i32,
+        message: job.message.clone(),
+        create_time: Some(timestamp_from_chrono(job.created_at)),
+        start_time: job.started_at.map(timestamp_from_chrono),
+        completion_time: job.finished_at.map(timestamp_from_chrono),
+        artifact_uri,
+    }
+}
+
+fn job_spec_to_pb(start_request: &StartJobRequest) -> JobSpec {
+    JobSpec {
+        source_url: start_request.url.clone(),
+        title: start_request.title.clone().unwrap_or_default(),
+        max_pages: start_request.max_pages as i32,
+        max_depth: start_request.max_depth as i32,
+        concurrency: start_request.concurrency as i32,
+        request_delay: Some(duration_from_ms(start_request.delay_ms)),
+        language_code: start_request.language.clone(),
+        tone: start_request.tone.clone(),
+        toc_engine: engine_to_pb(start_request.toc_engine) as i32,
+        render_engine: engine_to_pb(start_request.render_engine) as i32,
+    }
+}
+
+fn engine_to_pb(engine: LlmEngine) -> Engine {
+    match engine {
+        LlmEngine::Noop => Engine::Noop,
+        LlmEngine::Codex => Engine::Codex,
+    }
+}
+
+fn engine_or_default(value: i32, default: LlmEngine) -> Result<LlmEngine, String> {
+    match value {
+        0 => Ok(default),
+        x if x == Engine::Noop as i32 => Ok(LlmEngine::Noop),
+        x if x == Engine::Codex as i32 => Ok(LlmEngine::Codex),
+        other => Err(format!("unknown engine: {other}")),
+    }
+}
+
+fn job_name(job_id: &str) -> String {
+    format!("jobs/{job_id}")
+}
+
+fn operation_name(job_id: &str) -> String {
+    format!("operations/{job_id}")
+}
+
+fn job_id_from_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    let Some(job_id) = name.strip_prefix("jobs/") else {
+        return Err("name must be of the form jobs/{job}".to_string());
+    };
+    uuid::Uuid::parse_str(job_id).map_err(|err| format!("invalid job name: {err}"))?;
+    Ok(job_id.to_string())
+}
+
+fn job_id_from_operation_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    let Some(job_id) = name.strip_prefix("operations/") else {
+        return Err("name must be of the form operations/{operation}".to_string());
+    };
+    uuid::Uuid::parse_str(job_id).map_err(|err| format!("invalid operation name: {err}"))?;
+    Ok(job_id.to_string())
+}
+
+fn timestamp_from_chrono(dt: chrono::DateTime<chrono::Utc>) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: dt.timestamp(),
+        nanos: dt.timestamp_subsec_nanos() as i32,
+    }
+}
+
+fn duration_to_ms(d: &prost_types::Duration) -> Result<u64, String> {
+    if d.seconds < 0 || d.nanos < 0 {
+        return Err("request_delay must be >= 0".to_string());
+    }
+    let seconds = u64::try_from(d.seconds).map_err(|_| "request_delay is too large".to_string())?;
+    let nanos =
+        u64::try_from(d.nanos).map_err(|_| "request_delay nanos is too large".to_string())?;
+    Ok(seconds
+        .saturating_mul(1000)
+        .saturating_add(nanos / 1_000_000))
+}
+
+fn duration_from_ms(ms: u64) -> prost_types::Duration {
+    prost_types::Duration {
+        seconds: (ms / 1000) as i64,
+        nanos: ((ms % 1000) * 1_000_000) as i32,
+    }
+}
+
+async fn list_local_job_ids(base_dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let jobs_dir = base_dir.join("jobs");
+    let mut dir = match tokio::fs::read_dir(&jobs_dir).await {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut ids = Vec::new();
+    while let Some(entry) = dir.next_entry().await? {
+        let ty = entry.file_type().await?;
+        if !ty.is_dir() {
+            continue;
         }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if uuid::Uuid::parse_str(name.as_ref()).is_ok() {
+            ids.push(name.to_string());
+        }
+    }
+    Ok(ids)
+}
+
+fn pack_any(type_url: &str, msg: &impl prost::Message) -> prost_types::Any {
+    prost_types::Any {
+        type_url: type_url.to_string(),
+        value: msg.encode_to_vec(),
     }
 }
 
@@ -343,16 +720,20 @@ fn string_or_default(value: String, default: String) -> String {
     if v.is_empty() { default } else { v.to_string() }
 }
 
-fn u32_or_default(value: u32, default: u32) -> u32 {
-    if value == 0 { default } else { value }
+fn i32_as_usize_or_default(value: i32, default: usize) -> Result<usize, String> {
+    match value.cmp(&0) {
+        std::cmp::Ordering::Less => Err("value must be >= 0".to_string()),
+        std::cmp::Ordering::Equal => Ok(default),
+        std::cmp::Ordering::Greater => Ok(value as usize),
+    }
 }
 
-fn u64_from_u32_or_default(value: u32, default: u64) -> u64 {
-    if value == 0 { default } else { value as u64 }
-}
-
-fn usize_from_u32_or_default(value: u32, default: usize) -> usize {
-    if value == 0 { default } else { value as usize }
+fn i32_as_u32_or_default(value: i32, default: u32) -> Result<u32, String> {
+    match value.cmp(&0) {
+        std::cmp::Ordering::Less => Err("value must be >= 0".to_string()),
+        std::cmp::Ordering::Equal => Ok(default),
+        std::cmp::Ordering::Greater => Ok(value as u32),
+    }
 }
 
 trait IntoOptionString {

@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createGrpcWebTransport } from "@connectrpc/connect-web";
-import { JobStatus, SitebookifyService, type Job } from "./gen/sitebookify/v1/service_pb";
+import { anyUnpack } from "@bufbuild/protobuf/wkt";
+import {
+  CreateJobMetadataSchema,
+  Engine,
+  Job_State,
+  SitebookifyService,
+  type Job,
+} from "./gen/sitebookify/v1/service_pb";
 
 type UiState = {
-  jobId: string | null;
+  jobName: string | null;
   job: Job | null;
   downloadUrl: string | null;
   error: string | null;
@@ -20,8 +27,8 @@ export default function App() {
   }, []);
 
   const [url, setUrl] = useState("https://example.com/docs/");
-  const [{ jobId, job, downloadUrl, error, busy }, setState] = useState<UiState>({
-    jobId: null,
+  const [{ jobName, job, downloadUrl, error, busy }, setState] = useState<UiState>({
+    jobName: null,
     job: null,
     downloadUrl: null,
     error: null,
@@ -31,31 +38,50 @@ export default function App() {
   const canStart = url.trim().length > 0 && !busy;
 
   async function start() {
-    setState((s) => ({ ...s, busy: true, error: null, downloadUrl: null, job: null }));
+    setState((s) => ({ ...s, busy: true, error: null, downloadUrl: null, job: null, jobName: null }));
     try {
-      const res = await client.startCrawl({
-        url: url.trim(),
-        tocEngine: "noop",
-        renderEngine: "noop",
+      const op = await client.createJob({
+        job: {
+          spec: {
+            sourceUrl: url.trim(),
+            tocEngine: Engine.NOOP,
+            renderEngine: Engine.NOOP,
+          },
+        },
+        jobId: "",
       });
-      setState((s) => ({ ...s, jobId: res.jobId, busy: false }));
+
+      const jobNameFromMetadata = op.metadata
+        ? anyUnpack(op.metadata, CreateJobMetadataSchema)?.job ?? null
+        : null;
+      const jobNameFromOp = op.name.startsWith("operations/")
+        ? `jobs/${op.name.slice("operations/".length)}`
+        : null;
+
+      const resolvedJobName = jobNameFromMetadata ?? jobNameFromOp;
+      if (!resolvedJobName) {
+        throw new Error(`CreateJob returned an operation without a job reference: ${op.name}`);
+      }
+
+      setState((s) => ({ ...s, jobName: resolvedJobName, busy: false }));
     } catch (e) {
       setState((s) => ({ ...s, busy: false, error: String(e) }));
     }
   }
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobName) return;
+    if (downloadUrl) return;
     let stopped = false;
 
     const tick = async () => {
       try {
-        const j = await client.getJob({ jobId });
+        const j = await client.getJob({ name: jobName });
         if (stopped) return;
         setState((s) => ({ ...s, job: j }));
 
-        if (j.status === JobStatus.DONE) {
-          const dl = await client.getDownloadUrl({ jobId });
+        if (j.state === Job_State.DONE) {
+          const dl = await client.generateJobDownloadUrl({ name: jobName });
           if (stopped) return;
           setState((s) => ({ ...s, downloadUrl: dl.url }));
         }
@@ -71,18 +97,18 @@ export default function App() {
       stopped = true;
       window.clearInterval(id);
     };
-  }, [client, jobId]);
+  }, [client, jobName, downloadUrl]);
 
   const statusText = (() => {
     if (!job) return "—";
-    switch (job.status) {
-      case JobStatus.QUEUED:
+    switch (job.state) {
+      case Job_State.QUEUED:
         return "queued";
-      case JobStatus.RUNNING:
+      case Job_State.RUNNING:
         return "running";
-      case JobStatus.DONE:
+      case Job_State.DONE:
         return "done";
-      case JobStatus.ERROR:
+      case Job_State.ERROR:
         return "error";
       default:
         return "unknown";
@@ -129,11 +155,11 @@ export default function App() {
           <div className="status">
             <div className="row">
               <span className="pill">job</span>
-              <span className="muted">{jobId ?? "—"}</span>
+              <span className="muted">{jobName ?? "—"}</span>
             </div>
             <div className="row">
               <span className="pill">status</span>
-              <span className={job?.status === JobStatus.ERROR ? "error" : "muted"}>
+              <span className={job?.state === Job_State.ERROR ? "error" : "muted"}>
                 {statusText}
               </span>
               {job ? <span className="muted">• {job.message}</span> : null}

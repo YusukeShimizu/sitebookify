@@ -8,6 +8,7 @@ pub mod codex;
 pub mod crawl;
 pub mod extract;
 pub mod formats;
+pub mod google;
 pub mod grpc;
 pub mod logging;
 pub mod manifest;

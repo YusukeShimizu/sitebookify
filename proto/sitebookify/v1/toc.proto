@@ -4,17 +4,29 @@ package sitebookify.v1;
 
 import "buf/validate/validate.proto";
 
+option java_multiple_files = true;
+option java_outer_classname = "TocProto";
+option java_package = "com.sitebookify.v1";
+
 // Toc represents the structure of `toc.yaml` (chapter layout for book rendering).
 message Toc {
+  // Book title.
   string book_title = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Parts (top-level groups) in the book.
   repeated TocPart parts = 2 [(buf.validate.field).repeated.min_items = 1];
 }
 
+// TocPart represents a part (a top-level group) in the table of contents.
 message TocPart {
+  // Part title.
   string title = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Chapters in this part.
   repeated TocChapter chapters = 2 [(buf.validate.field).repeated.min_items = 1];
 }
 
+// TocChapter represents a chapter in the table of contents.
 message TocChapter {
   // Chapter identifier (used as file name like `ch01.md`).
   string id = 1 [(buf.validate.field).string.pattern = "^ch[0-9]{2}$"];
@@ -35,6 +47,7 @@ message TocChapter {
   repeated TocSection sections = 5 [(buf.validate.field).repeated.min_items = 1];
 }
 
+// TocSection represents a section within a chapter.
 message TocSection {
   // Human-readable section title.
   string title = 1 [(buf.validate.field).string.min_len = 1];
