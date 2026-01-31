@@ -109,6 +109,42 @@ sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日�
 sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book --language 日本語 --tone 丁寧 --engine noop
 ```
 
+## Web MVP（ローカル）
+
+`sitebookify-app`（Web 静的配信 + gRPC-Web API + in-process job runner）をローカルで起動できる。
+
+### Dev（Vite）
+
+ターミナルを 2 つ使う。
+
+```sh
+# terminal 1 (API)
+direnv allow
+just dev_app
+```
+
+```sh
+# terminal 2 (Web)
+direnv allow
+just web_install
+just web_gen
+just web_dev
+```
+
+ブラウザで `http://127.0.0.1:5173` を開く。
+
+### Build（静的配信）
+
+```sh
+direnv allow
+just web_install
+just web_gen
+just web_build
+just dev_app
+```
+
+ブラウザで `http://127.0.0.1:8080` を開く。
+
 ## 1ファイル出力（Bundle）
 
 `book render` 後に、mdBook 出力を 1 つの Markdown に統合して出力できる。

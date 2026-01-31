@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package sitebookify.v1;
+
+service SitebookifyService {
+  rpc StartCrawl(StartCrawlRequest) returns (StartCrawlResponse);
+  rpc GetJob(GetJobRequest) returns (Job);
+  rpc GetDownloadUrl(GetDownloadUrlRequest) returns (GetDownloadUrlResponse);
+}
+
+message StartCrawlRequest {
+  string url = 1;
+
+  // Optional title override for the generated book.
+  string title = 2;
+
+  // Crawl options (defaults are server-side).
+  uint32 max_pages = 3;
+  uint32 max_depth = 4;
+  uint32 concurrency = 5;
+  uint32 delay_ms = 6;
+
+  // Book rendering options.
+  string language = 7;
+  string tone = 8;
+
+  // Engines:
+  // - "noop" is deterministic (no LLM).
+  // - others are reserved for future server-side engines.
+  string toc_engine = 9;
+  string render_engine = 10;
+}
+
+message StartCrawlResponse {
+  string job_id = 1;
+}
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message GetDownloadUrlRequest {
+  string job_id = 1;
+}
+
+message GetDownloadUrlResponse {
+  // Download URL for the artifact.
+  string url = 1;
+
+  // Expiration seconds (0 if not applicable).
+  uint32 expires_sec = 2;
+}
+
+message Job {
+  string job_id = 1;
+
+  JobStatus status = 2;
+
+  // 0..=100
+  uint32 progress_percent = 3;
+  string message = 4;
+
+  // Present when status is DONE.
+  string artifact_url = 5;
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_QUEUED = 1;
+  JOB_STATUS_RUNNING = 2;
+  JOB_STATUS_DONE = 3;
+  JOB_STATUS_ERROR = 4;
+}

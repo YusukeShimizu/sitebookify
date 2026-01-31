@@ -24,3 +24,20 @@ docs_vale:
     cd docs && vale --config .vale.ini --glob='*.mdx' .
 
 ci: fmt proto_fmt proto_lint clippy test textlint docs_vale docs_links
+
+# --- Local Web MVP (optional) ---
+
+dev_app:
+    cargo run --bin sitebookify-app
+
+web_install:
+    cd web && npm install
+
+web_gen:
+    cd web && npm run gen
+
+web_dev:
+    cd web && npm run dev
+
+web_build:
+    cd web && npm run build

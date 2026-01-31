@@ -60,6 +60,7 @@
               openssl
               pandoc
               pkg-config
+              protobuf
               python312Packages.weasyprint
               rust-analyzer
               rustLibSrc

@@ -33,6 +33,8 @@ AGENTS.md
 # Node / Mintlify
 node_modules/
 docs/.mintlify/
+web/dist/
+web/src/gen/
 
 # Vale (cache)
 .vale/

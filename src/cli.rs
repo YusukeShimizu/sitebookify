@@ -219,7 +219,8 @@ pub struct BookBundleArgs {
     pub force: bool,
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LlmEngine {
     /// Do nothing (copy input to output).
     Noop,
