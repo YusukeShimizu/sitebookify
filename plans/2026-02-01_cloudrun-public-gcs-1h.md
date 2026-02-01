@@ -1,9 +1,10 @@
-# ExecPlan: Cloud Run 公開実行と GCS 1 時間保存
+# ExecPlan: Cloud Run 公開実行と GCS 保存（URL 1 時間 / オブジェクト 1 日）
 
 ## Goal
 
 - `sitebookify-app` を Cloud Run にデプロイし、一般ユーザがブラウザから実行できるようにする。
 - 生成物は GCS に保存し、ダウンロードは 1 時間で失効する URL で提供する。
+- 生成物オブジェクトは GCS ライフサイクルで 1 日後に削除する。
 - ログインと永続 DB を不要にする。
 
 ### Non-goals
@@ -39,19 +40,19 @@
 
 1. **アーキテクチャを確定する。**
    - 公開 Cloud Run の実行モデルを確定する。
-   - 「1 時間保存」の定義を確定する。
+   - 「ダウンロード URL 1 時間 / オブジェクト 1 日削除」の定義を確定する。
 2. **GCP リソースを用意する。**
    - Artifact Registry と GCS バケットを作る。
    - Cloud Run の実行用サービスアカウントを作る。
    - 最小権限の IAM を付与する。
-3. **Cloud Run にデプロイできるようにする。**
+3. **Cloud Run へデプロイできるようにする。**
    - 公開アクセスを有効にする。
    - `/healthz` を外部から確認できる。
 4. **ダウンロード URL の 1 時間失効を満たす。**
    - 署名付き URL の `expires=3600` を満たす。
-5. **GCS の 1 時間削除を満たす。**
-   - Cloud Scheduler で定期削除を実行できる。
-   - 1 時間を超えた生成物が消える。
+5. **GCS の 1 日削除を満たす。**
+   - GCS ライフサイクルで `age=1` の Delete を設定する。
+   - 1 日を超えた生成物が消える。
 6. **CI/CD を整備する。**
    - `main` への push で Cloud Run へデプロイできる。
    - 失敗時にロールバックできる手順を残す。
@@ -74,7 +75,7 @@
 ### TTL
 
 - 署名付き URL の有効期限が 1 時間である。
-- 削除ジョブを手動実行し、1 時間超の生成物が消える。
+- GCS バケットに `age=1` の Lifecycle Rule が設定されている。
 
 ## Decisions / Risks
 
@@ -85,8 +86,8 @@
   - Cloud Run の `--max-instances=1` と `--concurrency=1` を初期値にする。
   - 必要に応じて `--no-cpu-throttling` を使う。
 - 生成物は GCS に保存し、署名付き URL で配布する。
-- 生成物の削除は Cloud Scheduler で定期実行する。
-  - 実行先は Cloud Run Jobs を想定する。
+- 生成物の削除は GCS ライフサイクル（`age=1`）で行う。
+- インフラの source-of-truth は Terraform とし、`infra/terraform/cloudrun-public-gcs/` を使う。
 
 ### Risks / Mitigations
 
@@ -94,15 +95,15 @@
   - Mitigation: private IP とメタデータを拒否する。
   - Mitigation: 最大ページ数と最大時間を設ける。
   - Mitigation: `max-instances` を小さくする。
-- GCS のライフサイクルは日単位であり、1 時間削除を満たさない。
-  - Mitigation: 削除は Scheduler で 15 分ごとに走らせる。
-  - Mitigation: 保険として GCS ライフサイクルで 1 日削除も入れる。
+- オブジェクト削除が日単位のため、最大 1 日ぶんの保存コストが発生する。
+  - Mitigation: 生成物サイズ/生成頻度を監視し、必要なら TTL を短縮する。
 - Cloud Run は 1 リクエストの上限がある。
   - Mitigation: タイムアウトと作業量を制限する。
 
 ## Progress
 
 - 2026-02-01: `plans/` を復活し ExecPlan を追加した。
+- 2026-02-01: Cloud Run + GCS を Terraform で作成できるようにした（GCS lifecycle `age=1`）。
 
 ---
 
@@ -116,14 +117,12 @@
 - GCS: `sitebookify-artifacts`。
   - zip を保存する。
   - オブジェクトは非公開にする。
-- Cloud Scheduler + Cloud Run Jobs: `sitebookify-cleanup`。
-  - 期限超過のオブジェクトを削除する。
 
 ### 生成物の TTL
 
 - ダウンロードは署名付き URL を使う。
 - 署名付き URL の有効期限を 3600 秒にする。
-- オブジェクト削除は 15 分ごとの cleanup で 1 時間を満たす。
+- オブジェクト削除は GCS ライフサイクルで 1 日削除とする。
 
 ---
 
@@ -132,128 +131,54 @@
 前提条件。
 
 - `gcloud` が使える。
+- `terraform` が使える。
 - デプロイ先の GCP プロジェクトがある。
 
-### 1. API を有効化する
+### 1. Terraform の認証を行う
 
 ```sh
-gcloud services enable \
-  run.googleapis.com \
-  artifactregistry.googleapis.com \
-  storage.googleapis.com \
-  iam.googleapis.com \
-  iamcredentials.googleapis.com \
-  cloudscheduler.googleapis.com
+gcloud auth application-default login
 ```
 
-### 2. Artifact Registry を作る
+### 2. Artifact Registry へ push する（例）
+
+Terraform で Artifact Registry は作成されるが、Cloud Run を動かすには
+コンテナイメージを push しておく必要がある。
 
 ```sh
 PROJECT_ID="<your-project-id>"
-REGION="<your-region>"        # 例: asia-northeast1
+REGION="<your-region>" # 例: asia-northeast1
 AR_REPO="sitebookify"
-
-gcloud artifacts repositories create "${AR_REPO}" \
-  --project "${PROJECT_ID}" \
-  --location "${REGION}" \
-  --repository-format docker
-```
-
-### 3. GCS バケットを作る
-
-```sh
-PROJECT_ID="<your-project-id>"
-REGION="<your-region>"  # 例: asia-northeast1
-BUCKET="gs://${PROJECT_ID}-sitebookify-artifacts"
-
-gcloud storage buckets create "${BUCKET}" \
-  --location "${REGION}" \
-  --uniform-bucket-level-access
-```
-
-### 4. Cloud Run の実行 SA を作る
-
-```sh
-SA_NAME="sitebookify-runtime"
-gcloud iam service-accounts create "${SA_NAME}" --project "${PROJECT_ID}"
-SA="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-```
-
-### 5. GCS の権限を付ける
-
-```sh
-gcloud storage buckets add-iam-policy-binding "${BUCKET}" \
-  --member "serviceAccount:${SA}" \
-  --role "roles/storage.objectAdmin"
-```
-
-### 6. 署名付き URL の署名権限を付ける
-
-鍵ファイルを使わずに署名する場合は `iamcredentials.signBlob` を使う。
-そのための権限を付ける。
-
-```sh
-gcloud iam service-accounts add-iam-policy-binding "${SA}" \
-  --member "serviceAccount:${SA}" \
-  --role "roles/iam.serviceAccountTokenCreator"
-```
-
-### 7. Cloud Run の pull 権限を確認する
-
-Artifact Registry から pull するには Cloud Run のサービスエージェントに権限が要る。
-環境によっては自動付与されない。
-
-```sh
-PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
-RUN_AGENT="service-${PROJECT_NUMBER}@serverless-robot-prod.iam.gserviceaccount.com"
-
-gcloud artifacts repositories add-iam-policy-binding "${AR_REPO}" \
-  --location "${REGION}" \
-  --member "serviceAccount:${RUN_AGENT}" \
-  --role "roles/artifactregistry.reader"
-```
-
-### 8. Cloud Run をデプロイする
-
-この手順は例である。
-実際のイメージ名は Artifact Registry に合わせる。
-
-```sh
-SERVICE="sitebookify"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/sitebookify-app:latest"
 
-gcloud run deploy "${SERVICE}" \
-  --project "${PROJECT_ID}" \
-  --region "${REGION}" \
-  --image "${IMAGE}" \
-  --service-account "${SA}" \
-  --allow-unauthenticated \
-  --concurrency 1 \
-  --max-instances 1 \
-  --no-cpu-throttling \
-  --set-env-vars "SITEBOOKIFY_ARTIFACT_BUCKET=${BUCKET},SITEBOOKIFY_SIGNED_URL_TTL_SECS=3600"
+gcloud auth configure-docker "${REGION}-docker.pkg.dev"
+docker build -t "${IMAGE}" .
+docker push "${IMAGE}"
 ```
 
-### 9. 期限切れ生成物を削除する
-
-GCS ライフサイクルは日単位である。
-保険として 1 日削除を入れる。
+### 3. Terraform でインフラを作る
 
 ```sh
-cat > lifecycle.json <<'JSON'
-{
-  "rule": [
-    {
-      "action": { "type": "Delete" },
-      "condition": { "age": 1 }
-    }
-  ]
-}
-JSON
+cd infra/terraform/cloudrun-public-gcs
+cp terraform.tfvars.example terraform.tfvars
+$EDITOR terraform.tfvars
 
-gcloud storage buckets update "${BUCKET}" --lifecycle-file lifecycle.json
+terraform init
+terraform apply
 ```
 
-1 時間削除は Cloud Scheduler と Cloud Run Jobs を使う。
-この部分はアプリ側の実装が必要である。
+### 4. 動作確認（smoke）
 
+```sh
+cd infra/terraform/cloudrun-public-gcs
+URL="$(terraform output -raw cloud_run_service_url)"
+curl -fsS "${URL}/healthz"
+```
+
+### 5. Lifecycle Rule の確認
+
+```sh
+cd infra/terraform/cloudrun-public-gcs
+BUCKET="$(terraform output -raw artifact_bucket_name)"
+gcloud storage buckets describe "gs://${BUCKET}" --format="yaml(lifecycle)"
+```

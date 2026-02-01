@@ -43,3 +43,12 @@ web/src/gen/
 docs/styles/*
 !docs/styles/config/
 !docs/styles/config/**
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+terraform.tfvars
+*.auto.tfvars
