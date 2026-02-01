@@ -30,8 +30,8 @@ ci: fmt proto_fmt proto_lint aip_lint clippy test textlint docs_vale docs_links
 
 # --- Local Web MVP (optional) ---
 
-dev_app:
-    cargo run --bin sitebookify-app
+dev_app port="8080":
+    cargo run --bin sitebookify-app -- --addr 127.0.0.1:{{port}}
 
 web_install:
     cd web && npm install
