@@ -3,8 +3,10 @@ use std::fs::OpenOptions;
 use std::io::{BufWriter, Write as _};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context as _;
+use reqwest::header::{ACCEPT, USER_AGENT};
 use url::Url;
 
 use crate::cli::CrawlArgs;
@@ -59,6 +61,23 @@ impl CrawlScope {
     }
 }
 
+pub async fn resolve_start_url_for_crawl(url: &Url) -> Url {
+    let url = normalize_crawl_url(url);
+    if !should_try_trailing_slash(&url) {
+        return url;
+    }
+
+    let with_slash = url_with_trailing_slash(&url);
+    match probe_html_url(&with_slash).await {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) => url,
+        Err(err) => {
+            tracing::debug!(?err, candidate = %with_slash, "start url probe failed; using input url");
+            url
+        }
+    }
+}
+
 pub async fn run(args: CrawlArgs) -> anyhow::Result<()> {
     let out_dir = PathBuf::from(&args.out);
     crate::raw_store::ensure_raw_snapshot_dir_does_not_exist(&out_dir)
@@ -70,7 +89,7 @@ pub async fn run(args: CrawlArgs) -> anyhow::Result<()> {
     if start_url.scheme() != "http" && start_url.scheme() != "https" {
         anyhow::bail!("--url must be http/https: {start_url}");
     }
-    let start_url = normalize_crawl_url(&start_url);
+    let start_url = resolve_start_url_for_crawl(&start_url).await;
     let start_url_canonical = canonical_url(&start_url);
 
     let scope = CrawlScope::new(&start_url_canonical).context("build crawl scope")?;
@@ -294,6 +313,64 @@ fn normalize_crawl_url(url: &Url) -> Url {
     normalized.set_fragment(None);
     normalized.set_query(None);
     normalized
+}
+
+fn should_try_trailing_slash(url: &Url) -> bool {
+    let path = url.path();
+    if path.ends_with('/') {
+        return false;
+    }
+
+    let last_segment = path.rsplit('/').next().unwrap_or_default();
+    if last_segment.is_empty() {
+        return false;
+    }
+
+    !last_segment.contains('.')
+}
+
+fn url_with_trailing_slash(url: &Url) -> Url {
+    let mut out = url.clone();
+    let path = out.path();
+    if !path.ends_with('/') {
+        out.set_path(&format!("{path}/"));
+    }
+    out
+}
+
+async fn probe_html_url(url: &Url) -> anyhow::Result<Option<Url>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .context("build url probe http client")?;
+
+    let response = client
+        .get(url.clone())
+        .header(USER_AGENT, "sitebookify/0.1")
+        .header(ACCEPT, "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    if let Some(content_type) = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+    {
+        let content_type = content_type.to_ascii_lowercase();
+        if !(content_type.starts_with("text/html")
+            || content_type.starts_with("application/xhtml+xml"))
+        {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(normalize_crawl_url(response.url())))
 }
 
 fn canonical_url(url: &Url) -> Url {

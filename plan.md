@@ -1,12 +1,12 @@
 以下は、**Rust + gRPC-Web + React + shadcn/ui**で UI を作るための構成案です。  
 画像のように「1画面ランディング + URL入力でジョブ開始」の導線を想定します。  
-運用先は **Cloud Run** を想定します（入力 → ジョブ開始 → 進捗 → 成果物DL まで）。
+運用先は **Cloud Run** を想定します（入力 → ジョブ開始 → 進捗 → 出力プレビュー/コピー まで）。
 
 ---
 
 ## 1) 全体アーキテクチャ（推奨：Cloud Run で “Web + API” を分離、処理は Worker に逃がす）
 
-ドキュメントクロール＆PDF/EPUB生成は **同期HTTPで完結しない**ことが多いので、**APIはジョブ受付**、**生成は非同期Worker**に分けるのが安定です。
+ドキュメントクロール＆Markdown生成（`book.md`）は **同期HTTPで完結しない**ことが多いので、**APIはジョブ受付**、**生成は非同期Worker**に分けるのが安定です。
 
 ### 構成図（最小で強い）
 
@@ -29,7 +29,7 @@
 * **API**: Rust（tonic）で **gRPC** を提供しつつ、ブラウザ用に **gRPC-Web** を有効化
 * **Worker**: クロール＆レンダリング等の重処理（タイムアウト/メモリ/CPUをここに寄せる）
 * **Firestore**: job状態（queued/running/done/error）、進捗、成果物パス
-* **GCS**: PDF/EPUBを保存、APIが署名付きURLを返す
+* **GCS**: `book.md + assets/`（または zip）を保存、APIが署名付きURLを返す
 
 ---
 
@@ -113,8 +113,6 @@ service SitebookifyService {
 message StartCrawlRequest {
   string url = 1;            // "https://docs.rs/tokio/latest/"
   uint32 max_depth = 2;
-  enum OutputFormat { PDF = 0; EPUB = 1; }
-  OutputFormat format = 3;
 }
 
 message StartCrawlResponse { string job_id = 1; }
@@ -128,7 +126,7 @@ message Job {
   Status status = 2;
   uint32 progress_percent = 3;
   string message = 4;
-  string artifact_path = 5; // "gs://bucket/xxx.pdf" など
+  string artifact_path = 5; // "gs://bucket/xxx.zip" など
 }
 
 message JobEvent {
@@ -167,12 +165,12 @@ message GetDownloadUrlResponse { string url = 1; uint32 expires_sec = 2; }
 
 ## 6) Workerの実装方針（Cloud Run Jobs 推奨）
 
-クロール・PDF化は「時間がかかる」「メモリ食う」「再試行したい」ので、Workerは分離。
+クロール・生成は「時間がかかる」「メモリ食う」「再試行したい」ので、Workerは分離。
 
 ### Worker責務
 
 * job_id を受け取る（Pub/Sub メッセージなど）
-* クロール実行→中間成果保存→PDF/EPUB生成
+* クロール実行→中間成果保存→成果物生成（`book.md + assets/`）
 * GCSにアップロード
 * Firestoreに進捗更新（RUNNING→DONE/ERROR）
 
@@ -263,7 +261,7 @@ message GetDownloadUrlResponse { string url = 1; uint32 expires_sec = 2; }
 確認というより、最適案を選ぶための前提です。  
 答えがなくても上の構成で進められます。
 
-* **成果物は PDF のみ** / **EPUB も必須**
+* **zip でDLも必要** / **画面でプレビュー&コピーだけでOK**
 * クロールは「同一ドメイン配下のみ」など制限したい
 * 進捗は「バー表示が欲しい」 or 「完了通知だけでOK」
 

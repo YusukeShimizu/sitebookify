@@ -151,6 +151,7 @@ async fn try_main() -> anyhow::Result<()> {
     let mut app = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/artifacts/:job_id", get(download_artifact))
+        .route("/jobs/:job_id/book.md", get(download_book_md))
         .route_service("/sitebookify.v1.SitebookifyService/*rest", grpc_service)
         .route_service("/google.longrunning.Operations/*rest", ops_service)
         .layer(TraceLayer::new_for_http())
@@ -188,6 +189,10 @@ async fn download_artifact(
     State(state): State<AppState>,
     Path(job_id): Path<String>,
 ) -> Result<Response, axum::http::StatusCode> {
+    if uuid::Uuid::parse_str(job_id.trim()).is_err() {
+        return Err(axum::http::StatusCode::BAD_REQUEST);
+    }
+
     let Some(job) = state
         .job_store
         .get(&job_id)
@@ -222,6 +227,46 @@ async fn download_artifact(
             "attachment; filename=\"sitebookify-{job_id}.zip\""
         ))
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    Ok(resp)
+}
+
+async fn download_book_md(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> Result<Response, axum::http::StatusCode> {
+    if uuid::Uuid::parse_str(job_id.trim()).is_err() {
+        return Err(axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    let Some(job) = state
+        .job_store
+        .get(&job_id)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+    else {
+        return Err(axum::http::StatusCode::NOT_FOUND);
+    };
+
+    if job.status != JobStatus::Done {
+        return Err(axum::http::StatusCode::CONFLICT);
+    }
+
+    let path = job.work_dir.join("book.md");
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| axum::http::StatusCode::NOT_FOUND)?;
+    let stream = ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
+
+    let mut resp = Response::new(body);
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    resp.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("inline; filename=\"book.md\""),
     );
     Ok(resp)
 }
@@ -266,6 +311,7 @@ impl SitebookifyService for GrpcSitebookifyService {
                 "job.spec.source_url must be http/https",
             ));
         }
+        let url = sitebookify::crawl::resolve_start_url_for_crawl(&url).await;
 
         let work_dir = default_job_work_dir(&self.state.base_dir, &job_id);
 
