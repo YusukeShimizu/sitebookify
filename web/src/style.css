@@ -85,7 +85,9 @@ a {
   align-items: center;
 }
 
-input[type="url"] {
+input[type="url"],
+input[type="text"],
+select {
   width: 100%;
   padding: 12px 12px;
   border-radius: 10px;
@@ -95,8 +97,13 @@ input[type="url"] {
   outline: none;
 }
 
-input[type="url"]::placeholder {
+input[type="url"]::placeholder,
+input[type="text"]::placeholder {
   color: rgba(232, 238, 255, 0.45);
+}
+
+select {
+  cursor: pointer;
 }
 
 button {
@@ -131,6 +138,21 @@ button.small {
   font-size: 12px;
 }
 
+.settings {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.control {
+  flex: 1;
+  min-width: 200px;
+}
+
 .status {
   margin-top: 14px;
   display: grid;
@@ -152,6 +174,11 @@ button.small {
 
 .muted {
   color: var(--muted);
+}
+
+.hint {
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .error {
