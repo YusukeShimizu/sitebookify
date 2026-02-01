@@ -29,6 +29,10 @@ export default function App() {
   }, []);
 
   const [url, setUrl] = useState("https://example.com/docs/");
+  const [languageCode, setLanguageCode] = useState("日本語");
+  const [tone, setTone] = useState("丁寧");
+  const [tocEngine, setTocEngine] = useState<Engine>(Engine.NOOP);
+  const [renderEngine, setRenderEngine] = useState<Engine>(Engine.NOOP);
   const [{ jobName, job, bookMd, bookMdLoading, copied, error, busy }, setState] =
     useState<UiState>({
     jobName: null,
@@ -42,15 +46,32 @@ export default function App() {
 
   const canStart = url.trim().length > 0 && !busy;
 
+  const engineLabel =
+    tocEngine === Engine.OPENAI || renderEngine === Engine.OPENAI ? "openai" : "noop";
+
+  function engineValue(e: string): Engine {
+    const parsed = Number(e);
+    if (!Number.isFinite(parsed)) return Engine.UNSPECIFIED;
+    switch (parsed) {
+      case Engine.NOOP:
+      case Engine.OPENAI:
+      case Engine.UNSPECIFIED:
+        return parsed;
+      default:
+        return Engine.UNSPECIFIED;
+    }
+  }
+
   function jobIdFromName(name: string): string {
     return name.startsWith("jobs/") ? name.slice("jobs/".length) : name;
   }
 
-  async function fetchBookMd(name: string): Promise<string> {
+  async function fetchBookMd(name: string, signal?: AbortSignal): Promise<string> {
     const jobId = jobIdFromName(name);
     const resp = await fetch(`/jobs/${jobId}/book.md`, {
       method: "GET",
       headers: { Accept: "text/plain" },
+      signal,
     });
     if (!resp.ok) {
       throw new Error(`failed to fetch book.md (${resp.status}): ${await resp.text()}`);
@@ -74,8 +95,10 @@ export default function App() {
         job: {
           spec: {
             sourceUrl: url.trim(),
-            tocEngine: Engine.NOOP,
-            renderEngine: Engine.NOOP,
+            languageCode: languageCode.trim(),
+            tone: tone.trim(),
+            tocEngine,
+            renderEngine,
           },
         },
         jobId: "",
@@ -129,15 +152,17 @@ export default function App() {
     if (job?.state !== Job_State.DONE) return;
     if (bookMd || bookMdLoading) return;
     let stopped = false;
+    const controller = new AbortController();
 
     setState((s) => ({ ...s, bookMdLoading: true }));
     const run = async () => {
       try {
-        const md = await fetchBookMd(jobName);
+        const md = await fetchBookMd(jobName, controller.signal);
         if (stopped) return;
         setState((s) => ({ ...s, bookMd: md, bookMdLoading: false }));
       } catch (e) {
         if (stopped) return;
+        if (e instanceof DOMException && e.name === "AbortError") return;
         setState((s) => ({ ...s, bookMdLoading: false, error: String(e) }));
       }
     };
@@ -145,8 +170,9 @@ export default function App() {
     void run();
     return () => {
       stopped = true;
+      controller.abort();
     };
-  }, [jobName, job?.state, bookMd, bookMdLoading]);
+  }, [jobName, job?.state, bookMd]);
 
   const statusText = (() => {
     if (!job) return "—";
@@ -190,7 +216,7 @@ export default function App() {
     <div className="container">
       <div className="topbar">
         <div className="brand">{">_ sitebookify"}</div>
-        <div className="pill">gRPC-Web • local FS • noop</div>
+        <div className="pill">gRPC-Web • local FS • {engineLabel}</div>
       </div>
 
       <div className="hero">
@@ -221,6 +247,57 @@ export default function App() {
             <button onClick={() => void start()} disabled={!canStart}>
               {busy ? "Starting…" : "Start"}
             </button>
+          </div>
+
+          <div className="settings">
+            <div className="row wrap">
+              <span className="pill">toc</span>
+              <select
+                className="control"
+                value={tocEngine}
+                onChange={(e) => setTocEngine(engineValue(e.target.value))}
+              >
+                <option value={Engine.NOOP}>noop</option>
+                <option value={Engine.OPENAI}>openai</option>
+              </select>
+
+              <span className="pill">render</span>
+              <select
+                className="control"
+                value={renderEngine}
+                onChange={(e) => setRenderEngine(engineValue(e.target.value))}
+              >
+                <option value={Engine.NOOP}>noop</option>
+                <option value={Engine.OPENAI}>openai</option>
+              </select>
+            </div>
+
+            <div className="row wrap">
+              <span className="pill">language</span>
+              <input
+                className="control"
+                type="text"
+                value={languageCode}
+                onChange={(e) => setLanguageCode(e.target.value)}
+                placeholder="日本語 / English / …"
+              />
+
+              <span className="pill">tone</span>
+              <input
+                className="control"
+                type="text"
+                value={tone}
+                onChange={(e) => setTone(e.target.value)}
+                placeholder="丁寧 / casual / …"
+              />
+            </div>
+
+            {engineLabel === "openai" ? (
+              <div className="muted hint">
+                OpenAI engine requires the <code>openai</code> CLI on the server (see{" "}
+                <code>SITEBOOKIFY_OPENAI_*</code> in README).
+              </div>
+            ) : null}
           </div>
 
           <div className="status">
