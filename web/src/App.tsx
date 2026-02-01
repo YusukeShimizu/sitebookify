@@ -46,11 +46,12 @@ export default function App() {
     return name.startsWith("jobs/") ? name.slice("jobs/".length) : name;
   }
 
-  async function fetchBookMd(name: string): Promise<string> {
+  async function fetchBookMd(name: string, signal?: AbortSignal): Promise<string> {
     const jobId = jobIdFromName(name);
     const resp = await fetch(`/jobs/${jobId}/book.md`, {
       method: "GET",
       headers: { Accept: "text/plain" },
+      signal,
     });
     if (!resp.ok) {
       throw new Error(`failed to fetch book.md (${resp.status}): ${await resp.text()}`);
@@ -129,15 +130,17 @@ export default function App() {
     if (job?.state !== Job_State.DONE) return;
     if (bookMd || bookMdLoading) return;
     let stopped = false;
+    const controller = new AbortController();
 
     setState((s) => ({ ...s, bookMdLoading: true }));
     const run = async () => {
       try {
-        const md = await fetchBookMd(jobName);
+        const md = await fetchBookMd(jobName, controller.signal);
         if (stopped) return;
         setState((s) => ({ ...s, bookMd: md, bookMdLoading: false }));
       } catch (e) {
         if (stopped) return;
+        if (e instanceof DOMException && e.name === "AbortError") return;
         setState((s) => ({ ...s, bookMdLoading: false, error: String(e) }));
       }
     };
@@ -145,8 +148,9 @@ export default function App() {
     void run();
     return () => {
       stopped = true;
+      controller.abort();
     };
-  }, [jobName, job?.state, bookMd, bookMdLoading]);
+  }, [jobName, job?.state, bookMd]);
 
   const statusText = (() => {
     if (!job) return "—";
