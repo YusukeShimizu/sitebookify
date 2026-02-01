@@ -13,9 +13,11 @@ import {
 type UiState = {
   jobName: string | null;
   job: Job | null;
-  downloadUrl: string | null;
+  bookMd: string | null;
+  bookMdLoading: boolean;
   error: string | null;
   busy: boolean;
+  copied: boolean;
 };
 
 export default function App() {
@@ -27,18 +29,46 @@ export default function App() {
   }, []);
 
   const [url, setUrl] = useState("https://example.com/docs/");
-  const [{ jobName, job, downloadUrl, error, busy }, setState] = useState<UiState>({
+  const [{ jobName, job, bookMd, bookMdLoading, copied, error, busy }, setState] =
+    useState<UiState>({
     jobName: null,
     job: null,
-    downloadUrl: null,
+    bookMd: null,
+    bookMdLoading: false,
     error: null,
     busy: false,
+    copied: false,
   });
 
   const canStart = url.trim().length > 0 && !busy;
 
+  function jobIdFromName(name: string): string {
+    return name.startsWith("jobs/") ? name.slice("jobs/".length) : name;
+  }
+
+  async function fetchBookMd(name: string): Promise<string> {
+    const jobId = jobIdFromName(name);
+    const resp = await fetch(`/jobs/${jobId}/book.md`, {
+      method: "GET",
+      headers: { Accept: "text/plain" },
+    });
+    if (!resp.ok) {
+      throw new Error(`failed to fetch book.md (${resp.status}): ${await resp.text()}`);
+    }
+    return await resp.text();
+  }
+
   async function start() {
-    setState((s) => ({ ...s, busy: true, error: null, downloadUrl: null, job: null, jobName: null }));
+    setState((s) => ({
+      ...s,
+      busy: true,
+      error: null,
+      bookMd: null,
+      bookMdLoading: false,
+      copied: false,
+      job: null,
+      jobName: null,
+    }));
     try {
       const op = await client.createJob({
         job: {
@@ -71,7 +101,8 @@ export default function App() {
 
   useEffect(() => {
     if (!jobName) return;
-    if (downloadUrl) return;
+    if (job?.state === Job_State.ERROR) return;
+    if (job?.state === Job_State.DONE) return;
     let stopped = false;
 
     const tick = async () => {
@@ -79,12 +110,6 @@ export default function App() {
         const j = await client.getJob({ name: jobName });
         if (stopped) return;
         setState((s) => ({ ...s, job: j }));
-
-        if (j.state === Job_State.DONE) {
-          const dl = await client.generateJobDownloadUrl({ name: jobName });
-          if (stopped) return;
-          setState((s) => ({ ...s, downloadUrl: dl.url }));
-        }
       } catch (e) {
         if (stopped) return;
         setState((s) => ({ ...s, error: String(e) }));
@@ -97,7 +122,31 @@ export default function App() {
       stopped = true;
       window.clearInterval(id);
     };
-  }, [client, jobName, downloadUrl]);
+  }, [client, jobName, job?.state]);
+
+  useEffect(() => {
+    if (!jobName) return;
+    if (job?.state !== Job_State.DONE) return;
+    if (bookMd || bookMdLoading) return;
+    let stopped = false;
+
+    setState((s) => ({ ...s, bookMdLoading: true }));
+    const run = async () => {
+      try {
+        const md = await fetchBookMd(jobName);
+        if (stopped) return;
+        setState((s) => ({ ...s, bookMd: md, bookMdLoading: false }));
+      } catch (e) {
+        if (stopped) return;
+        setState((s) => ({ ...s, bookMdLoading: false, error: String(e) }));
+      }
+    };
+
+    void run();
+    return () => {
+      stopped = true;
+    };
+  }, [jobName, job?.state, bookMd, bookMdLoading]);
 
   const statusText = (() => {
     if (!job) return "—";
@@ -115,6 +164,28 @@ export default function App() {
     }
   })();
 
+  async function copyBookMd() {
+    if (!bookMd) return;
+    try {
+      await navigator.clipboard.writeText(bookMd);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = bookMd;
+      ta.style.position = "fixed";
+      ta.style.top = "0";
+      ta.style.left = "0";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+
+    setState((s) => ({ ...s, copied: true }));
+    window.setTimeout(() => setState((s) => ({ ...s, copied: false })), 1200);
+  }
+
   return (
     <div className="container">
       <div className="topbar">
@@ -129,8 +200,8 @@ export default function App() {
           textbook Markdown
         </h1>
         <p className="subtitle">
-          Paste a start URL. Sitebookify crawls, extracts, builds an mdBook, then bundles it into a
-          single <code>book.md</code> (+assets).
+          Paste a start URL. Sitebookify crawls, extracts, builds an mdBook, then shows the bundled{" "}
+          <code>book.md</code> here so you can review and copy it.
         </p>
 
         <div className="card">
@@ -164,16 +235,35 @@ export default function App() {
               </span>
               {job ? <span className="muted">• {job.message}</span> : null}
             </div>
+            <div className="row">
+              <span className="pill">url</span>
+              <span className="muted">{job?.spec?.sourceUrl ?? url.trim() || "—"}</span>
+            </div>
 
             <div className="progress" aria-label="progress">
               <div style={{ width: `${job?.progressPercent ?? 0}%` }} />
             </div>
             <div className="muted">{job ? `${job.progressPercent}%` : ""}</div>
 
-            {downloadUrl ? (
-              <div className="row">
-                <span className="pill success">artifact</span>
-                <a href={downloadUrl}>Download zip</a>
+            {job?.state === Job_State.DONE ? (
+              <div className="output">
+                <div className="row">
+                  <span className="pill success">output</span>
+                  <button
+                    className="small"
+                    onClick={() => void copyBookMd()}
+                    disabled={!bookMd || bookMdLoading}
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                  {bookMdLoading ? <span className="muted">Loading…</span> : null}
+                </div>
+                <textarea
+                  className="outputText"
+                  readOnly
+                  value={bookMd ?? ""}
+                  placeholder="Waiting for book.md…"
+                />
               </div>
             ) : null}
 

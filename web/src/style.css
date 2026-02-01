@@ -114,6 +114,12 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button.small {
+  padding: 8px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -156,9 +162,31 @@ button:disabled {
   color: var(--accent-2);
 }
 
+.output {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.outputText {
+  width: 100%;
+  min-height: 360px;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(17, 26, 51, 0.45);
+  color: var(--text);
+  outline: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
 .footer {
   margin-top: 24px;
   color: rgba(232, 238, 255, 0.6);
   font-size: 12px;
 }
-
