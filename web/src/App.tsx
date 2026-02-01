@@ -237,7 +237,7 @@ export default function App() {
             </div>
             <div className="row">
               <span className="pill">url</span>
-              <span className="muted">{job?.spec?.sourceUrl ?? url.trim() || "—"}</span>
+              <span className="muted">{job?.spec?.sourceUrl ?? (url.trim() || "—")}</span>
             </div>
 
             <div className="progress" aria-label="progress">
