@@ -80,7 +80,7 @@ sitebookify build --url https://example.com/docs/ --out workspace
 # sitebookify build --url https://example.com/docs/ --out workspace --title "Example Docs Textbook"
 ```
 
-TOC 作成と本文の書き換えは OpenAI（CLI 経由）を利用する。
+TOC 作成と本文の書き換えは OpenAI API（Responses API）を利用する。
 デフォルトでは `openai` エンジンを利用する。
 
 ```sh
@@ -88,13 +88,13 @@ TOC 作成と本文の書き換えは OpenAI（CLI 経由）を利用する。
 sitebookify build --url https://example.com/docs/ --out workspace --language 日本語 --tone 丁寧
 ```
 
-OpenAI エンジン（CLI 経由）のバイナリやモデルは環境変数で指定できる。
+OpenAI エンジン（Responses API）の API キーやモデルは環境変数で指定できる。
 
 ```sh
-echo 'export SITEBOOKIFY_OPENAI_MODEL=o3' > .envrc.local
+echo 'export OPENAI_API_KEY=...' > .envrc.local
+# もしくは: echo 'export SITEBOOKIFY_OPENAI_API_KEY=...' > .envrc.local
+echo 'export SITEBOOKIFY_OPENAI_MODEL=o3' >> .envrc.local
 echo 'export SITEBOOKIFY_OPENAI_REASONING_EFFORT=high' >> .envrc.local
-# 必要なら CLI バイナリ名も指定する（未指定の場合は `codex` を優先して自動検出する）
-# echo 'export SITEBOOKIFY_OPENAI_BIN=codex' >> .envrc.local
 direnv allow
 ```
 

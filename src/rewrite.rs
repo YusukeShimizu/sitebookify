@@ -12,21 +12,10 @@ pub fn rewrite_section_via_openai(
     let mut store = TokenStore::new();
     let protected = protect_markdown(source_markdown, &mut store);
 
-    let input_file = tempfile::NamedTempFile::new().context("create rewrite input temp file")?;
-    std::fs::write(input_file.path(), protected)
-        .with_context(|| format!("write rewrite input: {}", input_file.path().display()))?;
+    let prompt =
+        build_openai_rewrite_prompt(language, tone, chapter_title, section_title, &protected);
 
-    let config = OpenAiConfig::from_env();
-    let input_path = input_file.path().to_string_lossy();
-
-    let prompt = build_openai_rewrite_prompt(
-        language,
-        tone,
-        chapter_title,
-        section_title,
-        input_path.as_ref(),
-    );
-
+    let config = OpenAiConfig::from_env().context("load openai config")?;
     let raw = exec_readonly(&prompt, &config).context("openai exec for rewrite")?;
     let rewritten = normalize_placeholder_tokens(raw.trim_end());
 
@@ -43,7 +32,7 @@ fn build_openai_rewrite_prompt(
     tone: &str,
     chapter_title: &str,
     section_title: &str,
-    input_path: &str,
+    input_markdown: &str,
 ) -> String {
     format!(
         "You are a book editor and technical writer.\n\
@@ -75,7 +64,11 @@ Hard rules:\n\
 - Do NOT mention this instruction text.\n\
 \n\
 Input:\n\
-- Read the Markdown from the file at: {input_path}\n\
+- Read the Markdown between markers.\n\
+\n\
+BEGIN_MARKDOWN\n\
+{input_markdown}\n\
+END_MARKDOWN\n\
 \n\
 Output:\n\
 - Output ONLY the rewritten Markdown body for this section.\n",
@@ -83,7 +76,7 @@ Output:\n\
         section_title = section_title,
         language = language,
         tone = tone,
-        input_path = input_path,
+        input_markdown = input_markdown.trim_end(),
     )
 }
 

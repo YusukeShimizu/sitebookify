@@ -124,14 +124,19 @@ async fn plan_via_openai(
 ) -> anyhow::Result<TocPlan> {
     let pages = records
         .iter()
-        .map(|r| TocCreatePage {
-            id: r.id.clone(),
-            path: r.path.clone(),
-            title: r.title.clone(),
-            url: r.url.clone(),
-            extracted_md: r.extracted_md.clone(),
+        .map(|r| {
+            let extracted = std::fs::read_to_string(&r.extracted_md)
+                .with_context(|| format!("read extracted page: {}", r.extracted_md))?;
+            let extracted_md = strip_front_matter(&extracted).trim().to_owned();
+            Ok(TocCreatePage {
+                id: r.id.clone(),
+                path: r.path.clone(),
+                title: r.title.clone(),
+                url: r.url.clone(),
+                extracted_md,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let input = TocCreateInput {
         language: args.language.clone(),
@@ -141,22 +146,22 @@ async fn plan_via_openai(
     };
     let input_json = serde_json::to_string_pretty(&input).context("serialize toc input json")?;
 
-    let input_file = tempfile::NamedTempFile::new().context("create toc input temp file")?;
-    std::fs::write(input_file.path(), input_json)
-        .with_context(|| format!("write toc input: {}", input_file.path().display()))?;
-
     let prompt = format!(
         "You are a book editor.\n\
 \n\
 Task: Create a Table of Contents (TOC) for a book.\n\
 \n\
 Input:\n\
-- A JSON file exists at: {input_path}\n\
+- A JSON object is provided below.\n\
 - It contains `language`, `tone`, optional `book_title_hint`, and `pages`.\n\
-- Each page has an `extracted_md` path to a Markdown snapshot.\n\
+- Each page has `extracted_md` containing the Markdown snapshot (YAML front matter removed).\n\
+\n\
+BEGIN_TOC_INPUT_JSON\n\
+{input_json}\n\
+END_TOC_INPUT_JSON\n\
 \n\
 You MUST:\n\
-- Read *all* pages' `extracted_md` files and consider the full content (ignore YAML front matter).\n\
+- Read *all* pages' `extracted_md` strings and consider the full content.\n\
 - Make editorial decisions at the TOC level:\n\
   - Merge overlapping topics.\n\
   - Consolidate near-duplicate pages.\n\
@@ -181,11 +186,17 @@ Output:\n\
 - Output ONLY a single JSON object (no markdown fences, no commentary).\n\
 - Schema:\n\
   {{\"book_title\":\"...\",\"chapters\":[{{\"title\":\"...\",\"intent\":\"...\",\"reader_gains\":[\"...\"],\"sections\":[{{\"title\":\"...\",\"sources\":[\"p_...\"]}}]}}]}}\n",
-        input_path = input_file.path().display(),
+        input_json = input_json.trim_end(),
     );
 
-    let config = OpenAiConfig::from_env();
-    let raw = exec_readonly(&prompt, &config).context("openai exec for toc")?;
+    let config = OpenAiConfig::from_env().context("load openai config")?;
+    let raw = tokio::task::spawn_blocking({
+        let prompt = prompt.clone();
+        let config = config.clone();
+        move || exec_readonly(&prompt, &config).context("openai exec for toc")
+    })
+    .await
+    .context("join openai task")??;
     let json = extract_json_object(&raw).context("extract json object from openai output")?;
     serde_json::from_str(json).context("parse toc plan json")
 }
@@ -338,6 +349,32 @@ fn extract_json_object(text: &str) -> anyhow::Result<&str> {
         anyhow::bail!("invalid json object span");
     }
     Ok(&text[start..=end])
+}
+
+fn strip_front_matter(contents: &str) -> &str {
+    let mut lines = contents.lines();
+    let Some(first) = lines.next() else {
+        return contents;
+    };
+    if first.trim_end() != "---" {
+        return contents;
+    }
+
+    for (idx, line) in contents.lines().enumerate().skip(1) {
+        if line.trim_end() == "---" {
+            let mut offset = 0usize;
+            for (i, l) in contents.lines().enumerate() {
+                if i <= idx {
+                    offset += l.len() + 1;
+                } else {
+                    break;
+                }
+            }
+            return &contents[offset..];
+        }
+    }
+
+    contents
 }
 
 fn derive_chapter_title(records: &[ManifestRecord]) -> String {

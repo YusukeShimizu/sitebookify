@@ -64,8 +64,8 @@ Notes (MVP):
 - Workspaces are write-once: if `--out` already exists, `build` fails.
 - Crawl flags (`--max-pages`, `--max-depth`, `--concurrency`, `--delay-ms`) are supported.
 - `--toc-engine` and `--render-engine` accept `openai` or `noop` (default: `openai`).
-- OpenAI settings (CLI):
-  - `SITEBOOKIFY_OPENAI_BIN` (default: prefer `codex`, fallback: `openai`)
+- OpenAI settings (API):
+  - `OPENAI_API_KEY` (required; or `SITEBOOKIFY_OPENAI_API_KEY`)
   - `SITEBOOKIFY_OPENAI_MODEL` (optional)
   - `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (optional; e.g. `minimal`, `low`, `medium`, `high`, `xhigh`)
 

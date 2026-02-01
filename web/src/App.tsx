@@ -294,8 +294,8 @@ export default function App() {
 
             {engineLabel === "openai" ? (
               <div className="muted hint">
-                OpenAI engine requires the <code>codex</code> CLI (or legacy <code>openai</code>) on
-                the server (see <code>SITEBOOKIFY_OPENAI_*</code> in README).
+                OpenAI engine requires the API key on the server (see <code>OPENAI_API_KEY</code> /
+                <code>SITEBOOKIFY_OPENAI_*</code> in README).
               </div>
             ) : null}
           </div>
