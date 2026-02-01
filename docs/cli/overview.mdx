@@ -65,7 +65,7 @@ Notes (MVP):
 - Crawl flags (`--max-pages`, `--max-depth`, `--concurrency`, `--delay-ms`) are supported.
 - `--toc-engine` and `--render-engine` accept `openai` or `noop` (default: `openai`).
 - OpenAI settings (CLI):
-  - `SITEBOOKIFY_OPENAI_BIN` (default: `openai`)
+  - `SITEBOOKIFY_OPENAI_BIN` (default: prefer `codex`, fallback: `openai`)
   - `SITEBOOKIFY_OPENAI_MODEL` (optional)
   - `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (optional; e.g. `minimal`, `low`, `medium`, `high`, `xhigh`)
 

@@ -106,7 +106,8 @@ actions
         each chapter MUST have `intent` and `reader_gains`
         each section MUST have `sources` (page ids)
         when engine is "openai", invoke an OpenAI-compatible CLI
-            require env `SITEBOOKIFY_OPENAI_BIN` (default: `openai`) to exist in PATH
+            require an OpenAI-compatible CLI to exist in PATH
+            optionally override the binary via env `SITEBOOKIFY_OPENAI_BIN` (default: prefer `codex`, fallback: `openai`)
             optionally use env `SITEBOOKIFY_OPENAI_MODEL`
             optionally use env `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
         when engine is "noop", generate a deterministic TOC without using an LLM

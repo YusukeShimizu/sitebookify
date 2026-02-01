@@ -93,8 +93,8 @@ OpenAI エンジン（CLI 経由）のバイナリやモデルは環境変数で
 ```sh
 echo 'export SITEBOOKIFY_OPENAI_MODEL=o3' > .envrc.local
 echo 'export SITEBOOKIFY_OPENAI_REASONING_EFFORT=high' >> .envrc.local
-# 必要なら CLI バイナリ名も指定する（デフォルト: `openai`）
-# echo 'export SITEBOOKIFY_OPENAI_BIN=openai' >> .envrc.local
+# 必要なら CLI バイナリ名も指定する（未指定の場合は `codex` を優先して自動検出する）
+# echo 'export SITEBOOKIFY_OPENAI_BIN=codex' >> .envrc.local
 direnv allow
 ```
 
