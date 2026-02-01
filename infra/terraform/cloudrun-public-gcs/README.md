@@ -1,6 +1,7 @@
 # Terraform: Cloud Run public + GCS artifacts (1 day lifecycle)
 
-This Terraform creates the minimum GCP resources to run `sitebookify-app` on **public Cloud Run** and store artifacts in a **private GCS bucket** with a **1-day delete lifecycle**.
+This Terraform creates the minimum GCP resources to run `sitebookify-app` on **public Cloud Run**.
+Artifacts are stored in a **private GCS bucket** with a **1-day delete lifecycle**.
 
 ## Prerequisites
 
