@@ -3,7 +3,7 @@ use std::path::Path;
 
 use sitebookify::formats::{ManifestRecord, Toc, TocChapter, TocPart, TocSection};
 
-fn write_stub_codex_wrapping_tokens(bin_path: &Path) -> anyhow::Result<()> {
+fn write_stub_openai_wrapping_tokens(bin_path: &Path) -> anyhow::Result<()> {
     let script = r#"#!/bin/sh
 set -eu
 
@@ -135,11 +135,11 @@ lwk_wollet = \"0.11.0\"\n\
     .assert()
     .success();
 
-    let stub_codex = temp.path().join("codex-wrap-tokens");
-    write_stub_codex_wrapping_tokens(&stub_codex)?;
+    let stub_openai = temp.path().join("openai-wrap-tokens");
+    write_stub_openai_wrapping_tokens(&stub_openai)?;
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.env("SITEBOOKIFY_CODEX_BIN", stub_codex.to_str().unwrap())
+    cmd.env("SITEBOOKIFY_OPENAI_BIN", stub_openai.to_str().unwrap())
         .args([
             "book",
             "render",
@@ -150,7 +150,7 @@ lwk_wollet = \"0.11.0\"\n\
             "--out",
             book_dir.to_str().unwrap(),
             "--engine",
-            "codex",
+            "openai",
         ])
         .assert()
         .success();

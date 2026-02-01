@@ -80,20 +80,21 @@ sitebookify build --url https://example.com/docs/ --out workspace
 # sitebookify build --url https://example.com/docs/ --out workspace --title "Example Docs Textbook"
 ```
 
-TOC 作成と本文の書き換えは Codex CLI を利用する。
-事前に Codex CLI をインストールし、ログインしておく。
+TOC 作成と本文の書き換えは OpenAI（CLI 経由）を利用する。
+デフォルトでは `openai` エンジンを利用する。
 
 ```sh
 # 言語とトーンを指定できる（ニュアンス可変）
 sitebookify build --url https://example.com/docs/ --out workspace --language 日本語 --tone 丁寧
 ```
 
-Codex CLI のバイナリやモデルは環境変数で指定できる。
+OpenAI エンジン（CLI 経由）のバイナリやモデルは環境変数で指定できる。
 
 ```sh
-echo 'export SITEBOOKIFY_CODEX_BIN=codex' > .envrc.local
-echo 'export SITEBOOKIFY_CODEX_MODEL=o3' >> .envrc.local
-echo 'export SITEBOOKIFY_CODEX_REASONING_EFFORT=high' >> .envrc.local
+echo 'export SITEBOOKIFY_OPENAI_MODEL=o3' > .envrc.local
+echo 'export SITEBOOKIFY_OPENAI_REASONING_EFFORT=high' >> .envrc.local
+# 必要なら CLI バイナリ名も指定する（デフォルト: `openai`）
+# echo 'export SITEBOOKIFY_OPENAI_BIN=openai' >> .envrc.local
 direnv allow
 ```
 
@@ -116,12 +117,12 @@ workspace/
 sitebookify crawl --url https://example.com/docs/ --out raw
 sitebookify extract --raw raw --out extracted
 sitebookify manifest --extracted extracted --out manifest.jsonl
-sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine codex
+sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine openai
 sitebookify book init --out book --title "Example Docs Textbook"
-sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book --language 日本語 --tone 丁寧 --engine codex
+sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book --language 日本語 --tone 丁寧 --engine openai
 ```
 
-Codex を使わずに動作確認したい場合は `noop` を使う。
+OpenAI を使わずに動作確認したい場合は `noop` を使う。
 
 ```sh
 sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine noop

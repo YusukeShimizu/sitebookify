@@ -4,17 +4,17 @@ use std::process::{Command, Stdio};
 use anyhow::Context as _;
 
 #[derive(Debug, Clone)]
-pub struct CodexConfig {
+pub struct OpenAiConfig {
     pub bin: String,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
 }
 
-impl CodexConfig {
+impl OpenAiConfig {
     pub fn from_env() -> Self {
-        let bin = std::env::var("SITEBOOKIFY_CODEX_BIN").unwrap_or_else(|_| "codex".to_owned());
-        let model = std::env::var("SITEBOOKIFY_CODEX_MODEL").ok();
-        let reasoning_effort = std::env::var("SITEBOOKIFY_CODEX_REASONING_EFFORT").ok();
+        let bin = std::env::var("SITEBOOKIFY_OPENAI_BIN").unwrap_or_else(|_| "openai".to_owned());
+        let model = std::env::var("SITEBOOKIFY_OPENAI_MODEL").ok();
+        let reasoning_effort = std::env::var("SITEBOOKIFY_OPENAI_REASONING_EFFORT").ok();
         Self {
             bin,
             model,
@@ -23,8 +23,8 @@ impl CodexConfig {
     }
 }
 
-pub fn exec_readonly(prompt: &str, config: &CodexConfig) -> anyhow::Result<String> {
-    let output = tempfile::NamedTempFile::new().context("create codex output temp file")?;
+pub fn exec_readonly(prompt: &str, config: &OpenAiConfig) -> anyhow::Result<String> {
+    let output = tempfile::NamedTempFile::new().context("create openai output temp file")?;
     let output_path = output.path();
 
     let mut cmd = Command::new(&config.bin);
@@ -51,7 +51,7 @@ pub fn exec_readonly(prompt: &str, config: &CodexConfig) -> anyhow::Result<Strin
         bin = %config.bin,
         model = ?config.model,
         reasoning_effort = ?config.reasoning_effort,
-        "codex exec"
+        "openai cli exec"
     );
 
     let mut child = cmd
@@ -59,19 +59,19 @@ pub fn exec_readonly(prompt: &str, config: &CodexConfig) -> anyhow::Result<Strin
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
         .spawn()
-        .with_context(|| format!("spawn codex: {}", config.bin))?;
+        .with_context(|| format!("spawn openai cli: {}", config.bin))?;
 
     {
-        let mut stdin = child.stdin.take().context("open codex stdin")?;
+        let mut stdin = child.stdin.take().context("open openai stdin")?;
         stdin
             .write_all(prompt.as_bytes())
-            .context("write codex stdin")?;
+            .context("write openai stdin")?;
     }
 
-    let status = child.wait().context("wait codex")?;
+    let status = child.wait().context("wait openai")?;
     if !status.success() {
-        anyhow::bail!("codex failed ({status})");
+        anyhow::bail!("openai cli failed ({status})");
     }
 
-    std::fs::read_to_string(output_path).context("read codex last message")
+    std::fs::read_to_string(output_path).context("read openai last message")
 }

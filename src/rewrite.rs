@@ -1,8 +1,8 @@
 use anyhow::Context as _;
 
-use crate::codex::{CodexConfig, exec_readonly};
+use crate::openai::{OpenAiConfig, exec_readonly};
 
-pub fn rewrite_section_via_codex(
+pub fn rewrite_section_via_openai(
     language: &str,
     tone: &str,
     chapter_title: &str,
@@ -16,10 +16,10 @@ pub fn rewrite_section_via_codex(
     std::fs::write(input_file.path(), protected)
         .with_context(|| format!("write rewrite input: {}", input_file.path().display()))?;
 
-    let config = CodexConfig::from_env();
+    let config = OpenAiConfig::from_env();
     let input_path = input_file.path().to_string_lossy();
 
-    let prompt = build_codex_rewrite_prompt(
+    let prompt = build_openai_rewrite_prompt(
         language,
         tone,
         chapter_title,
@@ -27,7 +27,7 @@ pub fn rewrite_section_via_codex(
         input_path.as_ref(),
     );
 
-    let raw = exec_readonly(&prompt, &config).context("codex exec for rewrite")?;
+    let raw = exec_readonly(&prompt, &config).context("openai exec for rewrite")?;
     let rewritten = normalize_placeholder_tokens(raw.trim_end());
 
     if rewritten.trim().is_empty() {
@@ -38,7 +38,7 @@ pub fn rewrite_section_via_codex(
     Ok(unprotect_markdown_fully(&rewritten, &store.tokens))
 }
 
-fn build_codex_rewrite_prompt(
+fn build_openai_rewrite_prompt(
     language: &str,
     tone: &str,
     chapter_title: &str,

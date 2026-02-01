@@ -22,8 +22,8 @@ sitebookify build \
 
 Notes:
 
-- TOC creation and section rewrites use Codex CLI by default.
-  - Configure via `SITEBOOKIFY_CODEX_BIN` (default: `codex`), `SITEBOOKIFY_CODEX_MODEL` (optional), and `SITEBOOKIFY_CODEX_REASONING_EFFORT` (optional).
+- TOC creation and section rewrites use OpenAI (via a CLI) by default (`--toc-engine openai --render-engine openai`).
+  - Configure via `SITEBOOKIFY_OPENAI_BIN` (default: `openai`), `SITEBOOKIFY_OPENAI_MODEL` (optional), and `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (optional).
 - For a deterministic run without an LLM, set `--toc-engine noop --render-engine noop`.
 
 Next: [CLI overview](/cli/overview)

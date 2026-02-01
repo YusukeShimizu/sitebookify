@@ -431,6 +431,6 @@ enum Engine {
   // Deterministic (no LLM).
   ENGINE_NOOP = 1;
 
-  // Uses an LLM via Codex (server-side).
-  ENGINE_CODEX = 2;
+  // Uses an LLM via OpenAI (server-side).
+  ENGINE_OPENAI = 2;
 }

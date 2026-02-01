@@ -7,8 +7,8 @@ use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{LlmEngine, TocCreateArgs};
-use crate::codex::{CodexConfig, exec_readonly};
 use crate::formats::{ManifestRecord, Toc, TocChapter, TocPart, TocSection};
+use crate::openai::{OpenAiConfig, exec_readonly};
 
 pub async fn create(args: TocCreateArgs) -> anyhow::Result<()> {
     let manifest_path = PathBuf::from(&args.manifest);
@@ -25,7 +25,7 @@ pub async fn create(args: TocCreateArgs) -> anyhow::Result<()> {
 
     let plan = match args.engine {
         LlmEngine::Noop => plan_noop(&args, &records),
-        LlmEngine::Codex => plan_via_codex(&args, &records).await?,
+        LlmEngine::Openai => plan_via_openai(&args, &records).await?,
     };
 
     let toc = toc_from_plan(&args, &records, &plan).context("build toc from plan")?;
@@ -118,7 +118,7 @@ fn plan_noop(args: &TocCreateArgs, records: &[ManifestRecord]) -> TocPlan {
     }
 }
 
-async fn plan_via_codex(
+async fn plan_via_openai(
     args: &TocCreateArgs,
     records: &[ManifestRecord],
 ) -> anyhow::Result<TocPlan> {
@@ -184,9 +184,9 @@ Output:\n\
         input_path = input_file.path().display(),
     );
 
-    let config = CodexConfig::from_env();
-    let raw = exec_readonly(&prompt, &config).context("codex exec for toc")?;
-    let json = extract_json_object(&raw).context("extract json object from codex output")?;
+    let config = OpenAiConfig::from_env();
+    let raw = exec_readonly(&prompt, &config).context("openai exec for toc")?;
+    let json = extract_json_object(&raw).context("extract json object from openai output")?;
     serde_json::from_str(json).context("parse toc plan json")
 }
 

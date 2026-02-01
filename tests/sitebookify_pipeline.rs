@@ -185,7 +185,7 @@ fn count_files_with_extension(dir: &Path, extension: &str) -> anyhow::Result<usi
     Ok(count)
 }
 
-fn write_stub_codex(bin_path: &Path) -> anyhow::Result<()> {
+fn write_stub_openai(bin_path: &Path) -> anyhow::Result<()> {
     let script = r#"#!/bin/sh
 set -eu
 
@@ -220,8 +220,8 @@ if [ -z "$out" ]; then
   exit 2
 fi
 
-if [ -n "${SITEBOOKIFY_CODEX_REASONING_EFFORT:-}" ]; then
-  expected="model_reasoning_effort=\"${SITEBOOKIFY_CODEX_REASONING_EFFORT}\""
+if [ -n "${SITEBOOKIFY_OPENAI_REASONING_EFFORT:-}" ]; then
+  expected="model_reasoning_effort=\"${SITEBOOKIFY_OPENAI_REASONING_EFFORT}\""
   if ! echo "$configs" | grep -F -q "$expected"; then
     echo "missing expected config: $expected" >&2
     exit 2
@@ -303,8 +303,8 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let temp = tempfile::TempDir::new()?;
     let start_url = format!("{base_url}/docs/");
 
-    let stub_codex = temp.path().join("codex-stub");
-    write_stub_codex(&stub_codex)?;
+    let stub_openai = temp.path().join("openai-stub");
+    write_stub_openai(&stub_openai)?;
 
     let workspace_dir = temp.path().join("workspace");
     let raw_dir = workspace_dir.join("raw");
@@ -314,8 +314,8 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let book_dir = workspace_dir.join("book");
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.env("SITEBOOKIFY_CODEX_BIN", stub_codex.to_str().unwrap())
-        .env("SITEBOOKIFY_CODEX_REASONING_EFFORT", "high")
+    cmd.env("SITEBOOKIFY_OPENAI_BIN", stub_openai.to_str().unwrap())
+        .env("SITEBOOKIFY_OPENAI_REASONING_EFFORT", "high")
         .args([
             "build",
             "--url",
@@ -337,9 +337,9 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
             "--tone",
             "丁寧",
             "--toc-engine",
-            "codex",
+            "openai",
             "--render-engine",
-            "codex",
+            "openai",
         ])
         .assert()
         .success();
@@ -404,7 +404,7 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     assert_eq!(
         toc.parts[0].chapters.len(),
         manifest_records.len(),
-        "expected one chapter per manifest record from stub codex"
+        "expected one chapter per manifest record from stub openai"
     );
 
     let mut manifest_sorted = manifest_records.clone();

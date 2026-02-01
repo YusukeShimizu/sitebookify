@@ -92,12 +92,12 @@ pub struct BuildArgs {
     #[arg(long, default_value = "丁寧")]
     pub tone: String,
 
-    /// TOC creation engine (default: codex).
-    #[arg(long, value_enum, default_value_t = LlmEngine::Codex)]
+    /// TOC creation engine (default: openai).
+    #[arg(long, value_enum, default_value_t = LlmEngine::Openai)]
     pub toc_engine: LlmEngine,
 
-    /// Book rendering engine (default: codex).
-    #[arg(long, value_enum, default_value_t = LlmEngine::Codex)]
+    /// Book rendering engine (default: openai).
+    #[arg(long, value_enum, default_value_t = LlmEngine::Openai)]
     pub render_engine: LlmEngine,
 }
 
@@ -138,7 +138,7 @@ pub struct TocCreateArgs {
     #[arg(long)]
     pub out: String,
 
-    /// Book title written to `toc.yaml` (default: derived from the manifest / Codex).
+    /// Book title written to `toc.yaml` (default: derived from the manifest / LLM).
     #[arg(long)]
     pub book_title: Option<String>,
 
@@ -154,8 +154,8 @@ pub struct TocCreateArgs {
     #[arg(long, default_value = "丁寧")]
     pub tone: String,
 
-    /// TOC creation engine (default: codex).
-    #[arg(long, value_enum, default_value_t = LlmEngine::Codex)]
+    /// TOC creation engine (default: openai).
+    #[arg(long, value_enum, default_value_t = LlmEngine::Openai)]
     pub engine: LlmEngine,
 }
 
@@ -199,8 +199,8 @@ pub struct BookRenderArgs {
     #[arg(long, default_value = "丁寧")]
     pub tone: String,
 
-    /// Book rendering engine (default: codex).
-    #[arg(long, value_enum, default_value_t = LlmEngine::Codex)]
+    /// Book rendering engine (default: openai).
+    #[arg(long, value_enum, default_value_t = LlmEngine::Openai)]
     pub engine: LlmEngine,
 }
 
@@ -225,6 +225,6 @@ pub enum LlmEngine {
     /// Do nothing (copy input to output).
     Noop,
 
-    /// Run Codex CLI.
-    Codex,
+    /// Use OpenAI via a CLI.
+    Openai,
 }

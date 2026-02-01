@@ -3,7 +3,7 @@ use std::path::Path;
 
 use sitebookify::formats::{ManifestRecord, Toc, TocChapter, TocPart, TocSection};
 
-fn write_stub_codex_dropping_tokens(bin_path: &Path) -> anyhow::Result<()> {
+fn write_stub_openai_dropping_tokens(bin_path: &Path) -> anyhow::Result<()> {
     let script = r#"#!/bin/sh
 set -eu
 
@@ -47,7 +47,7 @@ echo "short summary" >"$out"
 }
 
 #[test]
-fn rewrite_keeps_output_when_codex_drops_tokens() -> anyhow::Result<()> {
+fn rewrite_keeps_output_when_openai_drops_tokens() -> anyhow::Result<()> {
     let temp = tempfile::TempDir::new()?;
 
     let page_id =
@@ -111,11 +111,11 @@ Here is https://example.com and `code` and [link](https://openai.com/).\n"
     .assert()
     .success();
 
-    let stub_codex = temp.path().join("codex-drop-tokens");
-    write_stub_codex_dropping_tokens(&stub_codex)?;
+    let stub_openai = temp.path().join("openai-drop-tokens");
+    write_stub_openai_dropping_tokens(&stub_openai)?;
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.env("SITEBOOKIFY_CODEX_BIN", stub_codex.to_str().unwrap())
+    cmd.env("SITEBOOKIFY_OPENAI_BIN", stub_openai.to_str().unwrap())
         .args([
             "book",
             "render",
@@ -126,7 +126,7 @@ Here is https://example.com and `code` and [link](https://openai.com/).\n"
             "--out",
             book_dir.to_str().unwrap(),
             "--engine",
-            "codex",
+            "openai",
         ])
         .assert()
         .success();

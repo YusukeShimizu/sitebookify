@@ -63,11 +63,11 @@ Notes (MVP):
 
 - Workspaces are write-once: if `--out` already exists, `build` fails.
 - Crawl flags (`--max-pages`, `--max-depth`, `--concurrency`, `--delay-ms`) are supported.
-- `--toc-engine` and `--render-engine` accept `codex` or `noop` (default: `codex`).
-- Codex settings:
-  - `SITEBOOKIFY_CODEX_BIN` (default: `codex`)
-  - `SITEBOOKIFY_CODEX_MODEL` (optional)
-  - `SITEBOOKIFY_CODEX_REASONING_EFFORT` (optional; e.g. `minimal`, `low`, `medium`, `high`, `xhigh`)
+- `--toc-engine` and `--render-engine` accept `openai` or `noop` (default: `openai`).
+- OpenAI settings (CLI):
+  - `SITEBOOKIFY_OPENAI_BIN` (default: `openai`)
+  - `SITEBOOKIFY_OPENAI_MODEL` (optional)
+  - `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (optional; e.g. `minimal`, `low`, `medium`, `high`, `xhigh`)
 
 ### `crawl`
 
@@ -120,13 +120,13 @@ sitebookify manifest --extracted extracted --out manifest.jsonl
 Generate `toc.yaml` from `manifest.jsonl`.
 
 ```sh
-sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine codex
+sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine openai
 ```
 
 If you want to override the generated book title:
 
 ```sh
-sitebookify toc create --manifest manifest.jsonl --out toc.yaml --book-title "My Book" --language 日本語 --tone 丁寧 --engine codex
+sitebookify toc create --manifest manifest.jsonl --out toc.yaml --book-title "My Book" --language 日本語 --tone 丁寧 --engine openai
 ```
 
 ### `book init`
@@ -142,7 +142,7 @@ sitebookify book init --out book --title "Example Docs Textbook"
 Render chapters based on `toc.yaml` and `manifest.jsonl`.
 
 ```sh
-sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book --language 日本語 --tone 丁寧 --engine codex
+sitebookify book render --toc toc.yaml --manifest manifest.jsonl --out book --language 日本語 --tone 丁寧 --engine openai
 ```
 
 Notes (MVP):

@@ -609,7 +609,7 @@ fn render_chapter_md(
 
         let section_body = match ctx.engine {
             LlmEngine::Noop => source_material.trim_end().to_owned(),
-            LlmEngine::Codex => rewrite::rewrite_section_via_codex(
+            LlmEngine::Openai => rewrite::rewrite_section_via_openai(
                 ctx.language,
                 ctx.tone,
                 &chapter.title,
@@ -617,7 +617,7 @@ fn render_chapter_md(
                 source_material.trim_end(),
             )
             .with_context(|| {
-                format!("codex rewrite section: {} / {}", chapter.id, section.title)
+                format!("openai rewrite section: {} / {}", chapter.id, section.title)
             })?,
         };
 

@@ -37,7 +37,7 @@
 3) **LLM（TOC作成/本文書き換え）**
 - MVP: `noop`（ローカル/Cloud Run のどちらでも外部依存なく回す）
 - 後で: “サーバ向け” エンジン（OpenAI API など）を追加
-  - ※現状の仕様（Codex CLI 呼び出し）は Cloud Run と相性が悪いので、Web 版は別実装前提にする
+  - ※現状の仕様（OpenAI CLI 呼び出し）は Cloud Run と相性が悪いので、Web 版は別実装前提にする
 
 ---
 

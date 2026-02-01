@@ -61,7 +61,7 @@ purpose
     TOC 作成では、章ごとに「狙い」「読者が得るもの」を持たせる。
     TOC の各節は、材料にする page_id（元ページ）を参照する。
     TOC 作成時点で「重複ページは片方に寄せる」「似た話題は統合」などの編集判断を行う。
-    本文の書き換えは Codex CLI をエンジンとして行い、ユーザは任意の言語とトーンを指定できる。
+    本文の書き換えは OpenAI（CLI 経由）をエンジンとして行い、ユーザは任意の言語とトーンを指定できる。
     robots.txt は MVP では未対応である。
 state
     binary_name: string
@@ -105,10 +105,10 @@ actions
         may propose a better `book_title`
         each chapter MUST have `intent` and `reader_gains`
         each section MUST have `sources` (page ids)
-        when engine is "codex", invoke Codex CLI
-            require env `SITEBOOKIFY_CODEX_BIN` (default: `codex`) to exist in PATH
-            optionally use env `SITEBOOKIFY_CODEX_MODEL`
-            optionally use env `SITEBOOKIFY_CODEX_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
+        when engine is "openai", invoke an OpenAI-compatible CLI
+            require env `SITEBOOKIFY_OPENAI_BIN` (default: `openai`) to exist in PATH
+            optionally use env `SITEBOOKIFY_OPENAI_MODEL`
+            optionally use env `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
         when engine is "noop", generate a deterministic TOC without using an LLM
         do not overwrite existing output files unless `force` is set
     book_init [ out: string ; title: string ]
@@ -130,9 +130,9 @@ actions
         when a link target matches a manifest page URL, rewrite to an internal anchor link
         download referenced images into `book/src/assets/*` and rewrite image destinations to local relative paths
         include stable anchors (e.g. `<a id="p_..."></a>`) for each referenced source page id
-        when engine is "codex", invoke Codex CLI and rewrite each section into book-first prose
-            optionally use env `SITEBOOKIFY_CODEX_MODEL`
-            optionally use env `SITEBOOKIFY_CODEX_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
+        when engine is "openai", invoke an OpenAI-compatible CLI and rewrite each section into book-first prose
+            optionally use env `SITEBOOKIFY_OPENAI_MODEL`
+            optionally use env `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
             headings are minimal; body is paragraph-first
             bullet lists are limited to key-point summaries
             avoid web/article vocabulary (e.g. prefer "本章では" over "この記事では")

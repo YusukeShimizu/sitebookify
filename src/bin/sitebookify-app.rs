@@ -620,7 +620,7 @@ fn job_spec_to_pb(start_request: &StartJobRequest) -> JobSpec {
 fn engine_to_pb(engine: LlmEngine) -> Engine {
     match engine {
         LlmEngine::Noop => Engine::Noop,
-        LlmEngine::Codex => Engine::Codex,
+        LlmEngine::Openai => Engine::Openai,
     }
 }
 
@@ -628,7 +628,7 @@ fn engine_or_default(value: i32, default: LlmEngine) -> Result<LlmEngine, String
     match value {
         0 => Ok(default),
         x if x == Engine::Noop as i32 => Ok(LlmEngine::Noop),
-        x if x == Engine::Codex as i32 => Ok(LlmEngine::Codex),
+        x if x == Engine::Openai as i32 => Ok(LlmEngine::Openai),
         other => Err(format!("unknown engine: {other}")),
     }
 }
