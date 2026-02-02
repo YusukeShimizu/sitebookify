@@ -46,5 +46,6 @@ Non-goals:
 
 - 2026-02-02: ExecPlan 作成、現状調査開始。
 - 2026-02-02: Web に Markdown プレビュー（GFM）と Mermaid レンダリングを追加、`web` の build まで確認。
-- 2026-02-02: `sitebookify-app` を 18080 で起動し `curl` で `/healthz` と `/jobs/<id>/book.md` を確認（8080 はローカルで利用中だった）。
-- 2026-02-02: `web/src/MarkdownPreview.tsx` の正規表現が TypeScript のパースエラーになっていたため修正し、`just web_build` が通ることを確認。
+- 2026-02-02: `sitebookify-app` を 18080 で起動し、`curl` で `/healthz` を確認。
+- 2026-02-02: `/jobs/<id>/book.md` も確認（8080 はローカルで利用中）。
+- 2026-02-02: `web/src/MarkdownPreview.tsx` の build エラーを修正し、`just web_build` が通ることを確認。
