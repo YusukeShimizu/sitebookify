@@ -23,7 +23,7 @@ sitebookify build \
 Notes:
 
 - TOC creation and section rewrites use OpenAI (Responses API) by default (`--toc-engine openai --render-engine openai`).
-  - Configure via `OPENAI_API_KEY` (or `SITEBOOKIFY_OPENAI_API_KEY`), `SITEBOOKIFY_OPENAI_MODEL` (optional), and `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (optional).
+  - Configure via `OPENAI_API_KEY` (or `SITEBOOKIFY_OPENAI_API_KEY`). Defaults: `SITEBOOKIFY_OPENAI_MODEL=gpt5.2`, `SITEBOOKIFY_OPENAI_REASONING_EFFORT=medium` (override via env vars).
 - For a deterministic run without an LLM, set `--toc-engine noop --render-engine noop`.
 
 Next: [CLI overview](/cli/overview)

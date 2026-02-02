@@ -25,9 +25,12 @@ impl OpenAiConfig {
 
         let model = std::env::var("SITEBOOKIFY_OPENAI_MODEL")
             .or_else(|_| std::env::var("OPENAI_MODEL"))
-            .unwrap_or_else(|_| "gpt-4o-mini".to_owned());
+            .unwrap_or_else(|_| "gpt5.2".to_owned());
 
-        let reasoning_effort = std::env::var("SITEBOOKIFY_OPENAI_REASONING_EFFORT").ok();
+        let reasoning_effort = std::env::var("SITEBOOKIFY_OPENAI_REASONING_EFFORT")
+            .ok()
+            .filter(|effort| !effort.trim().is_empty())
+            .or_else(|| Some("medium".to_owned()));
 
         Ok(Self {
             api_key,

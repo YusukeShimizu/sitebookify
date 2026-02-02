@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::PathBuf;
@@ -212,20 +212,13 @@ fn toc_from_plan(
     if plan.chapters.is_empty() {
         anyhow::bail!("toc plan has no chapters");
     }
-    if plan.chapters.len() > 99 {
-        anyhow::bail!(
-            "too many chapters ({}); chapter ids are limited to ch01..ch99",
-            plan.chapters.len()
-        );
-    }
-
     let manifest_ids = records
         .iter()
         .map(|r| r.id.as_str())
         .collect::<HashSet<_>>();
-    let mut seen = HashSet::new();
+    let mut last_source_location: HashMap<&str, (usize, usize)> = HashMap::new();
 
-    for ch in &plan.chapters {
+    for (ch_idx, ch) in plan.chapters.iter().enumerate() {
         if ch.title.trim().is_empty() {
             anyhow::bail!("toc plan chapter title is empty");
         }
@@ -239,7 +232,7 @@ fn toc_from_plan(
             anyhow::bail!("toc plan chapter sections is empty");
         }
 
-        for section in &ch.sections {
+        for (sec_idx, section) in ch.sections.iter().enumerate() {
             if section.title.trim().is_empty() {
                 anyhow::bail!("toc plan section title is empty");
             }
@@ -250,28 +243,42 @@ fn toc_from_plan(
                 if !manifest_ids.contains(src.as_str()) {
                     anyhow::bail!("unknown source id in toc plan: {src}");
                 }
-                if !seen.insert(src.as_str()) {
-                    anyhow::bail!("duplicate source id in toc plan: {src}");
+
+                // Allow duplicates and treat them as "overwrite":
+                // If the same page id appears multiple times across sections, keep only the last
+                // occurrence and drop earlier ones.
+                if let Some((prev_ch_idx, prev_sec_idx)) =
+                    last_source_location.insert(src.as_str(), (ch_idx, sec_idx))
+                {
+                    tracing::info!(
+                        source_id = src,
+                        prev_chapter_index = prev_ch_idx,
+                        prev_section_index = prev_sec_idx,
+                        chapter_index = ch_idx,
+                        section_index = sec_idx,
+                        "toc plan duplicate source id; overwriting earlier occurrence"
+                    );
                 }
             }
         }
     }
 
-    if seen.is_empty() {
+    let selected = last_source_location.keys().copied().collect::<HashSet<_>>();
+    if selected.is_empty() {
         anyhow::bail!("toc plan does not include any manifest pages");
     }
 
-    if seen.len() != manifest_ids.len() {
+    if selected.len() != manifest_ids.len() {
         let mut omitted = Vec::new();
         for id in &manifest_ids {
-            if !seen.contains(id) {
+            if !selected.contains(id) {
                 omitted.push((*id).to_owned());
             }
         }
         omitted.sort();
         let sample = omitted.iter().take(10).cloned().collect::<Vec<_>>();
         tracing::info!(
-            selected_pages = seen.len(),
+            selected_pages = selected.len(),
             total_pages = manifest_ids.len(),
             omitted_pages = omitted.len(),
             omitted_sample = ?sample,
@@ -284,27 +291,68 @@ fn toc_from_plan(
         .clone()
         .unwrap_or_else(|| plan.book_title.clone());
 
-    let chapters = plan
-        .chapters
-        .iter()
-        .enumerate()
-        .map(|(idx, ch)| {
-            let mut gains = ch.reader_gains.clone();
-            gains.retain(|g| !g.trim().is_empty());
-            TocChapter {
-                id: format!("ch{:02}", idx + 1),
-                title: ch.title.clone(),
-                intent: ch.intent.clone(),
-                reader_gains: gains,
-                sections: ch
-                    .sections
-                    .iter()
-                    .map(|s| TocSection {
-                        title: s.title.clone(),
-                        sources: s.sources.clone(),
-                    })
-                    .collect(),
+    let mut chapters = Vec::new();
+    for (ch_idx, ch) in plan.chapters.iter().enumerate() {
+        let mut sections = Vec::new();
+        for (sec_idx, s) in ch.sections.iter().enumerate() {
+            let mut unique_in_section = HashSet::new();
+            let sources = s
+                .sources
+                .iter()
+                .filter(|src| last_source_location.get(src.as_str()) == Some(&(ch_idx, sec_idx)))
+                .filter(|src| unique_in_section.insert(src.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+
+            if sources.is_empty() {
+                tracing::info!(
+                    chapter_index = ch_idx,
+                    section_index = sec_idx,
+                    section_title = %s.title,
+                    "toc plan section has no sources after deduplication; dropping"
+                );
+                continue;
             }
+
+            sections.push(TocSection {
+                title: s.title.clone(),
+                sources,
+            });
+        }
+
+        if sections.is_empty() {
+            tracing::info!(
+                chapter_index = ch_idx,
+                chapter_title = %ch.title,
+                "toc plan chapter has no sections after deduplication; dropping"
+            );
+            continue;
+        }
+
+        let mut gains = ch.reader_gains.clone();
+        gains.retain(|g| !g.trim().is_empty());
+        chapters.push((ch, gains, sections));
+    }
+
+    if chapters.is_empty() {
+        anyhow::bail!("toc plan has no chapters after deduplication");
+    }
+    if chapters.len() > 99 {
+        anyhow::bail!(
+            "too many chapters ({}); chapter ids are limited to ch01..ch99",
+            chapters.len()
+        );
+    }
+
+    let chapters = chapters
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (ch, gains, sections))| TocChapter {
+            id: format!("ch{:02}", idx + 1),
+            title: ch.title.clone(),
+            intent: ch.intent.clone(),
+            reader_gains: gains,
+            sections,
         })
         .collect::<Vec<_>>();
 
@@ -416,5 +464,102 @@ fn title_case_segment(segment: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => segment.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_args() -> TocCreateArgs {
+        TocCreateArgs {
+            manifest: "manifest.jsonl".to_owned(),
+            out: "toc.yaml".to_owned(),
+            book_title: None,
+            force: false,
+            language: "日本語".to_owned(),
+            tone: "丁寧".to_owned(),
+            engine: LlmEngine::Noop,
+        }
+    }
+
+    fn record(id: &str) -> ManifestRecord {
+        ManifestRecord {
+            id: id.to_owned(),
+            url: format!("https://example.com/{id}"),
+            title: id.to_owned(),
+            path: "/docs".to_owned(),
+            extracted_md: "extracted/pages/example.md".to_owned(),
+        }
+    }
+
+    #[test]
+    fn toc_from_plan_overwrites_duplicate_sources() -> anyhow::Result<()> {
+        let args = test_args();
+        let records = vec![record("p1"), record("p2")];
+
+        let plan = TocPlan {
+            book_title: "Test Book".to_owned(),
+            chapters: vec![TocPlanChapter {
+                title: "Chapter".to_owned(),
+                intent: "Intent".to_owned(),
+                reader_gains: vec!["Gain".to_owned()],
+                sections: vec![
+                    TocPlanSection {
+                        title: "Section 1".to_owned(),
+                        sources: vec!["p1".to_owned(), "p2".to_owned()],
+                    },
+                    TocPlanSection {
+                        title: "Section 2".to_owned(),
+                        sources: vec!["p1".to_owned()],
+                    },
+                ],
+            }],
+        };
+
+        let toc = toc_from_plan(&args, &records, &plan)?;
+        let sections = &toc.parts[0].chapters[0].sections;
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].title, "Section 1");
+        assert_eq!(sections[0].sources, vec!["p2"]);
+        assert_eq!(sections[1].title, "Section 2");
+        assert_eq!(sections[1].sources, vec!["p1"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn toc_from_plan_drops_sections_that_become_empty() -> anyhow::Result<()> {
+        let args = test_args();
+        let records = vec![record("p1")];
+
+        let plan = TocPlan {
+            book_title: "Test Book".to_owned(),
+            chapters: vec![TocPlanChapter {
+                title: "Chapter".to_owned(),
+                intent: "Intent".to_owned(),
+                reader_gains: vec!["Gain".to_owned()],
+                sections: vec![
+                    TocPlanSection {
+                        title: "Section 1".to_owned(),
+                        sources: vec!["p1".to_owned()],
+                    },
+                    TocPlanSection {
+                        title: "Section 2".to_owned(),
+                        sources: vec!["p1".to_owned()],
+                    },
+                ],
+            }],
+        };
+
+        let toc = toc_from_plan(&args, &records, &plan)?;
+        let sections = &toc.parts[0].chapters[0].sections;
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].title, "Section 2");
+        assert_eq!(sections[0].sources, vec!["p1"]);
+
+        Ok(())
     }
 }
