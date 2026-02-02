@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createGrpcWebTransport } from "@connectrpc/connect-web";
 import { anyUnpack } from "@bufbuild/protobuf/wkt";
+import { MarkdownPreview } from "./MarkdownPreview";
 import {
   CreateJobMetadataSchema,
   Engine,
@@ -33,6 +34,7 @@ export default function App() {
   const [tone, setTone] = useState("丁寧");
   const [tocEngine, setTocEngine] = useState<Engine>(Engine.NOOP);
   const [renderEngine, setRenderEngine] = useState<Engine>(Engine.NOOP);
+  const [outputView, setOutputView] = useState<"preview" | "raw">("preview");
   const [{ jobName, job, bookMd, bookMdLoading, copied, error, busy }, setState] =
     useState<UiState>({
     jobName: null,
@@ -80,6 +82,7 @@ export default function App() {
   }
 
   async function start() {
+    setOutputView("preview");
     setState((s) => ({
       ...s,
       busy: true,
@@ -324,7 +327,7 @@ export default function App() {
 
             {job?.state === Job_State.DONE ? (
               <div className="output">
-                <div className="row">
+                <div className="row wrap">
                   <span className="pill success">output</span>
                   <button
                     className="small"
@@ -333,14 +336,38 @@ export default function App() {
                   >
                     {copied ? "Copied" : "Copy"}
                   </button>
+                  <div className="segmented">
+                    <button
+                      className={`small ${outputView === "preview" ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setOutputView("preview")}
+                    >
+                      Preview
+                    </button>
+                    <button
+                      className={`small ${outputView === "raw" ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setOutputView("raw")}
+                    >
+                      Markdown
+                    </button>
+                  </div>
                   {bookMdLoading ? <span className="muted">Loading…</span> : null}
                 </div>
-                <textarea
-                  className="outputText"
-                  readOnly
-                  value={bookMd ?? ""}
-                  placeholder="Waiting for book.md…"
-                />
+                {outputView === "preview" ? (
+                  bookMd ? (
+                    <MarkdownPreview markdown={bookMd} />
+                  ) : (
+                    <div className="markdownFrame muted">Waiting for book.md…</div>
+                  )
+                ) : (
+                  <textarea
+                    className="outputText"
+                    readOnly
+                    value={bookMd ?? ""}
+                    placeholder="Waiting for book.md…"
+                  />
+                )}
               </div>
             ) : null}
 

@@ -20,17 +20,23 @@
 
 3) **コンテナイメージ（Artifact Registry へ push できる状態）**
 - Cloud Run のデプロイには `container_image` が必要。
-- `infra/terraform/cloudrun-public-gcs/` は Artifact Registry リポジトリを作るが、**イメージの push は別途**（ローカル or GitHub Actions）。
+- `infra/terraform/cloudrun-public-gcs/` は Artifact Registry リポジトリまで作る。
+  - **イメージの push は別途**（ローカルまたは GitHub Actions）。
 
 ## Terraform が作るもの（`cloudrun-public-gcs`）
 
 Terraform: `infra/terraform/cloudrun-public-gcs/`
 
-- API 有効化: `run.googleapis.com`, `storage.googleapis.com`, `artifactregistry.googleapis.com`, `iam.googleapis.com`, `iamcredentials.googleapis.com`
+- API 有効化:
+  - `run.googleapis.com`
+  - `storage.googleapis.com`
+  - `artifactregistry.googleapis.com`
+  - `iam.googleapis.com`
+  - `iamcredentials.googleapis.com`
 - Artifact Registry (Docker) リポジトリ
 - Cloud Run（`allUsers` に `roles/run.invoker` 付与 = 公開）
 - Cloud Run 実行用 Service Account（最小権限寄せ）
-- GCS バケット（生成物保管想定、非公開、Lifecycle で一定日数後に削除）
+- GCS バケット（生成物の保管先。非公開。Lifecycle で一定日数後に削除）
 
 変えたい値は `infra/terraform/cloudrun-public-gcs/variables.tf` を参照。
 
@@ -44,7 +50,7 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-`container_image` は次の形式（例）:
+`container_image` は次の形式で指定する（例は次の通り）。
 
 ```text
 <REGION>-docker.pkg.dev/<PROJECT_ID>/<REPO>/sitebookify-app:latest
@@ -106,13 +112,16 @@ Artifact Registry への push は GitHub Actions でも可能（鍵ファイル�
   - `GCP_PROJECT_ID`: `your-gcp-project-id`
   - `GCP_REGION`: `asia-northeast1`
   - `GAR_REPOSITORY`: `sitebookify`（Terraform の `artifact_registry_repository_id` と揃える）
-  - `GCP_WORKLOAD_IDENTITY_PROVIDER`: `projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`
+  - `GCP_WORKLOAD_IDENTITY_PROVIDER`: 形式は次の通り。
+    ```text
+    projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+    ```
   - `GCP_SERVICE_ACCOUNT`: `github-actions@<project>.iam.gserviceaccount.com`
 
 GCP 側の具体手順は構成差が大きいので、まずはリポジトリの `README.md` の
 「CI: GCP Artifact Registry へ Docker image を push」を参照。
 
-### いつ push される？
+### いつ push されるか
 
 `image-gcp` workflow はイベントで挙動が分かれる。
 
@@ -122,4 +131,4 @@ GCP 側の具体手順は構成差が大きいので、まずはリポジトリ�
 ## 運用メモ（最小）
 
 - 公開 Cloud Run は濫用されやすいので、必要なら `max_instances` を絞る・認証を付ける・WAF/Cloud Armor を検討する。
-- Terraform state は今はローカル（`terraform.tfstate`）になる。チーム運用するなら GCS backend を用意するのがおすすめ。
+- Terraform state は現状ローカル（`terraform.tfstate`）で管理する。チーム運用するなら GCS backend を用意するのがおすすめ。
