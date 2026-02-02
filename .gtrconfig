@@ -1,0 +1,16 @@
+# .gtrconfig - commit this file to share settings with your team
+#
+# This repository intentionally keeps local agent tooling out of git:
+# - `.codex/` (Codex skills / local agent setup)
+# - `AGENTS.md` (local instructions for agents)
+#
+# Copy them into new worktrees so tools keep working when you run:
+#   git gtr new <branch>
+
+[copy]
+    include = **/AGENTS.md
+    include = **/.envrc.local
+    includeDirs = .codex
+
+[defaults]
+    ai = codex
