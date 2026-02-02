@@ -107,8 +107,8 @@ actions
         each section MUST have `sources` (page ids)
         when engine is "openai", call OpenAI Responses API
             require env `OPENAI_API_KEY` (or `SITEBOOKIFY_OPENAI_API_KEY`)
-            optionally use env `SITEBOOKIFY_OPENAI_MODEL`
-            optionally use env `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
+            use env `SITEBOOKIFY_OPENAI_MODEL` (default: "gpt5.2")
+            use env `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (default: "medium"; e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
             optionally use env `SITEBOOKIFY_OPENAI_BASE_URL` (for testing/proxies)
         when engine is "noop", generate a deterministic TOC without using an LLM
         do not overwrite existing output files unless `force` is set
@@ -133,8 +133,8 @@ actions
         include stable anchors (e.g. `<a id="p_..."></a>`) for each referenced source page id
         when engine is "openai", call OpenAI Responses API and rewrite each section into book-first prose
             require env `OPENAI_API_KEY` (or `SITEBOOKIFY_OPENAI_API_KEY`)
-            optionally use env `SITEBOOKIFY_OPENAI_MODEL`
-            optionally use env `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
+            use env `SITEBOOKIFY_OPENAI_MODEL` (default: "gpt5.2")
+            use env `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (default: "medium"; e.g. "minimal" | "low" | "medium" | "high" | "xhigh")
             optionally use env `SITEBOOKIFY_OPENAI_BASE_URL` (for testing/proxies)
             headings are minimal; body is paragraph-first
             bullet lists are limited to key-point summaries

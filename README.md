@@ -88,12 +88,15 @@ TOC 作成と本文の書き換えは OpenAI API（Responses API）を利用す�
 sitebookify build --url https://example.com/docs/ --out workspace --language 日本語 --tone 丁寧
 ```
 
-OpenAI エンジン（Responses API）の API キーやモデルは環境変数で指定できる。
+OpenAI エンジン（Responses API）の API キーやモデルは環境変数で指定できる。  
+デフォルトは `SITEBOOKIFY_OPENAI_MODEL=gpt5.2`、`SITEBOOKIFY_OPENAI_REASONING_EFFORT=medium`。
 
 ```sh
 echo 'export OPENAI_API_KEY=...' > .envrc.local
 # もしくは: echo 'export SITEBOOKIFY_OPENAI_API_KEY=...' > .envrc.local
-echo 'export SITEBOOKIFY_OPENAI_MODEL=o3' >> .envrc.local
+# 任意: デフォルト値を上書きする場合のみ指定
+# 例: モデルや reasoning effort を変更する
+echo 'export SITEBOOKIFY_OPENAI_MODEL=gpt5.2' >> .envrc.local
 echo 'export SITEBOOKIFY_OPENAI_REASONING_EFFORT=high' >> .envrc.local
 direnv allow
 ```
