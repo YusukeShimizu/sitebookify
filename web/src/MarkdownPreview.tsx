@@ -83,24 +83,31 @@ export function MarkdownPreview({ markdown }: MarkdownPreviewProps) {
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
-          pre({ children, ...props }) {
-            if (Array.isArray(children) && children.length === 1) {
-              const child = children[0];
-              if (React.isValidElement(child)) {
-                const className = String(child.props?.className ?? "");
-                if (className.includes("language-mermaid")) {
-                  const code = String(child.props?.children ?? "").trimEnd();
-                  return <MermaidDiagram code={code} />;
-                }
-              }
-            }
+	          pre({ children, ...props }) {
+	            if (Array.isArray(children) && children.length === 1) {
+	              const child = children[0];
+	              if (React.isValidElement(child)) {
+	                const element = child as React.ReactElement<{
+	                  className?: unknown;
+	                  children?: unknown;
+	                }>;
+	                const className = String(element.props?.className ?? "");
+	                if (className.includes("language-mermaid")) {
+	                  const code = String(element.props?.children ?? "").trimEnd();
+	                  return <MermaidDiagram code={code} />;
+	                }
+	              }
+	            }
             return <pre {...props}>{children}</pre>;
           },
           a({ href, children, ...props }) {
             // Keep users inside the app by default while still letting them open docs.
             // In particular, `book.md` can contain absolute links back to the source site.
+            const normalizedHref = typeof href === "string" ? href.trim() : "";
             const isExternal =
-              typeof href === "string" && /^(https?:)?\\/\\//i.test(href.trim());
+              normalizedHref.startsWith("http://") ||
+              normalizedHref.startsWith("https://") ||
+              normalizedHref.startsWith("//");
             return (
               <a
                 href={href}
