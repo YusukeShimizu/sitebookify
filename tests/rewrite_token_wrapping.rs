@@ -1,68 +1,8 @@
 use std::fs;
-use std::path::Path;
 
 use sitebookify::formats::{ManifestRecord, Toc, TocChapter, TocPart, TocSection};
 
-fn write_stub_openai_wrapping_tokens(bin_path: &Path) -> anyhow::Result<()> {
-    let script = r#"#!/bin/sh
-set -eu
-
-out=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --output-last-message)
-      out="$2"
-      shift 2
-      ;;
-    --output-last-message=*)
-      out="${1#*=}"
-      shift 1
-      ;;
-    *)
-      shift 1
-      ;;
-  esac
-done
-
-if [ -z "$out" ]; then
-  echo "missing --output-last-message" >&2
-  exit 2
-fi
-
-prompt="$(cat)"
-
-if echo "$prompt" | grep -q "Rewrite the input Markdown"; then
-  input_path="$(echo "$prompt" | sed -n 's/^- Read the Markdown from the file at: //p' | head -n 1)"
-  if [ -z "$input_path" ]; then
-    echo "missing rewrite input path" >&2
-    exit 2
-  fi
-
-  # Mimic a model that "escapes" our placeholder tokens by wrapping them in extra braces.
-  # Example: `{{SBY_TOKEN_000000}}` -> `{{{SBY_TOKEN_000000}}}`
-  cat "$input_path" \
-    | sed 's/{{SBY_TOKEN_/{{{SBY_TOKEN_/g' \
-    | sed 's/}}/}}}/g' \
-    >"$out"
-  exit 0
-fi
-
-echo "unknown stub mode" >&2
-exit 2
-"#;
-
-    fs::write(bin_path, script)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut perms = fs::metadata(bin_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(bin_path, perms)?;
-    }
-
-    Ok(())
-}
+mod openai_stub;
 
 #[test]
 fn rewrite_unwraps_extra_braces_around_tokens() -> anyhow::Result<()> {
@@ -135,11 +75,15 @@ lwk_wollet = \"0.11.0\"\n\
     .assert()
     .success();
 
-    let stub_openai = temp.path().join("openai-wrap-tokens");
-    write_stub_openai_wrapping_tokens(&stub_openai)?;
+    let _openai = openai_stub::OpenAiStub::spawn(openai_stub::OpenAiStubConfig {
+        expected_reasoning_effort: None,
+        rewrite_behavior: openai_stub::RewriteBehavior::WrapTokens,
+    });
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.env("SITEBOOKIFY_OPENAI_BIN", stub_openai.to_str().unwrap())
+    cmd.env("OPENAI_API_KEY", "test-key")
+        .env("SITEBOOKIFY_OPENAI_BASE_URL", &_openai.base_url)
+        .env("SITEBOOKIFY_OPENAI_MODEL", "stub-model")
         .args([
             "book",
             "render",

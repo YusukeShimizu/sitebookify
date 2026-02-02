@@ -225,6 +225,6 @@ pub enum LlmEngine {
     /// Do nothing (copy input to output).
     Noop,
 
-    /// Use OpenAI via a CLI.
+    /// Use OpenAI via Responses API.
     Openai,
 }

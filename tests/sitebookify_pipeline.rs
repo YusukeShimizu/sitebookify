@@ -10,6 +10,8 @@ use sha2::Digest as _;
 use sha2::Sha256;
 use sitebookify::formats::{CrawlRecord, ManifestRecord, Toc};
 
+mod openai_stub;
+
 static LOGO_PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0,
     0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 23, 0, 2, 3, 1, 128,
@@ -185,126 +187,15 @@ fn count_files_with_extension(dir: &Path, extension: &str) -> anyhow::Result<usi
     Ok(count)
 }
 
-fn write_stub_openai(bin_path: &Path) -> anyhow::Result<()> {
-    let script = r#"#!/bin/sh
-set -eu
-
-out=""
-configs=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --output-last-message)
-      out="$2"
-      shift 2
-      ;;
-    --output-last-message=*)
-      out="${1#*=}"
-      shift 1
-      ;;
-    -c|--config)
-      configs="${configs} $2"
-      shift 2
-      ;;
-    -c=*|--config=*)
-      configs="${configs} ${1#*=}"
-      shift 1
-      ;;
-    *)
-      shift 1
-      ;;
-  esac
-done
-
-if [ -z "$out" ]; then
-  echo "missing --output-last-message" >&2
-  exit 2
-fi
-
-if [ -n "${SITEBOOKIFY_OPENAI_REASONING_EFFORT:-}" ]; then
-  expected="model_reasoning_effort=\"${SITEBOOKIFY_OPENAI_REASONING_EFFORT}\""
-  if ! echo "$configs" | grep -F -q "$expected"; then
-    echo "missing expected config: $expected" >&2
-    exit 2
-  fi
-fi
-
-prompt="$(cat)"
-
-if echo "$prompt" | grep -q "Create a Table of Contents"; then
-  input_path="$(echo "$prompt" | sed -n 's/^- A JSON file exists at: //p' | head -n 1)"
-  if [ -z "$input_path" ]; then
-    echo "missing toc input path" >&2
-    exit 2
-  fi
-  ids="$(sed -E -n 's/.*"id": "(p_[0-9a-f]{64})".*/\1/p' "$input_path")"
-  if [ -z "$ids" ]; then
-    echo "no ids found in toc input" >&2
-    exit 2
-  fi
-
-  # One chapter per page id (in input order). This is enough to exercise cross-chapter link rewriting.
-  {
-    echo '{'
-    echo '  "book_title": "Stub Book",'
-    echo '  "chapters": ['
-    i=0
-    for id in $ids; do
-      i=$((i+1))
-      [ $i -gt 1 ] && echo '    ,'
-      echo '    {'
-      echo "      \"title\": \"Chapter $i\","
-      echo '      "intent": "Test intent.",'
-      echo '      "reader_gains": ["Test gain."],'
-      echo '      "sections": ['
-      echo '        {'
-      echo "          \"title\": \"Section $i\","
-      echo "          \"sources\": [\"$id\"]"
-      echo '        }'
-      echo '      ]'
-      echo '    }'
-    done
-    echo
-    echo '  ]'
-    echo '}'
-  } >"$out"
-  exit 0
-fi
-
-if echo "$prompt" | grep -q "Rewrite the input Markdown"; then
-  input_path="$(echo "$prompt" | sed -n 's/^- Read the Markdown from the file at: //p' | head -n 1)"
-  if [ -z "$input_path" ]; then
-    echo "missing rewrite input path" >&2
-    exit 2
-  fi
-  cat "$input_path" >"$out"
-  exit 0
-fi
-
-echo "unknown stub mode" >&2
-exit 2
-"#;
-
-    fs::write(bin_path, script)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut perms = fs::metadata(bin_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(bin_path, perms)?;
-    }
-
-    Ok(())
-}
-
 #[test]
 fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let (base_url, shutdown_tx, server_handle) = spawn_docs_server();
     let temp = tempfile::TempDir::new()?;
     let start_url = format!("{base_url}/docs/");
-
-    let stub_openai = temp.path().join("openai-stub");
-    write_stub_openai(&stub_openai)?;
+    let _openai = openai_stub::OpenAiStub::spawn(openai_stub::OpenAiStubConfig {
+        expected_reasoning_effort: Some("high".to_owned()),
+        rewrite_behavior: openai_stub::RewriteBehavior::EchoInput,
+    });
 
     let workspace_dir = temp.path().join("workspace");
     let raw_dir = workspace_dir.join("raw");
@@ -314,7 +205,9 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     let book_dir = workspace_dir.join("book");
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.env("SITEBOOKIFY_OPENAI_BIN", stub_openai.to_str().unwrap())
+    cmd.env("OPENAI_API_KEY", "test-key")
+        .env("SITEBOOKIFY_OPENAI_BASE_URL", &_openai.base_url)
+        .env("SITEBOOKIFY_OPENAI_MODEL", "stub-model")
         .env("SITEBOOKIFY_OPENAI_REASONING_EFFORT", "high")
         .args([
             "build",

@@ -1,50 +1,8 @@
 use std::fs;
-use std::path::Path;
 
 use sitebookify::formats::{ManifestRecord, Toc, TocChapter, TocPart, TocSection};
 
-fn write_stub_openai_dropping_tokens(bin_path: &Path) -> anyhow::Result<()> {
-    let script = r#"#!/bin/sh
-set -eu
-
-out=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --output-last-message)
-      out="$2"
-      shift 2
-      ;;
-    --output-last-message=*)
-      out="${1#*=}"
-      shift 1
-      ;;
-    *)
-      shift 1
-      ;;
-  esac
-done
-
-if [ -z "$out" ]; then
-  echo "missing --output-last-message" >&2
-  exit 2
-fi
-
-# Intentionally drop placeholder tokens.
-echo "short summary" >"$out"
-"#;
-
-    fs::write(bin_path, script)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut perms = fs::metadata(bin_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(bin_path, perms)?;
-    }
-
-    Ok(())
-}
+mod openai_stub;
 
 #[test]
 fn rewrite_keeps_output_when_openai_drops_tokens() -> anyhow::Result<()> {
@@ -111,11 +69,15 @@ Here is https://example.com and `code` and [link](https://openai.com/).\n"
     .assert()
     .success();
 
-    let stub_openai = temp.path().join("openai-drop-tokens");
-    write_stub_openai_dropping_tokens(&stub_openai)?;
+    let _openai = openai_stub::OpenAiStub::spawn(openai_stub::OpenAiStubConfig {
+        expected_reasoning_effort: None,
+        rewrite_behavior: openai_stub::RewriteBehavior::DropTokens,
+    });
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
-    cmd.env("SITEBOOKIFY_OPENAI_BIN", stub_openai.to_str().unwrap())
+    cmd.env("OPENAI_API_KEY", "test-key")
+        .env("SITEBOOKIFY_OPENAI_BASE_URL", &_openai.base_url)
+        .env("SITEBOOKIFY_OPENAI_MODEL", "stub-model")
         .args([
             "book",
             "render",

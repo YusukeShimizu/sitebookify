@@ -1,77 +1,132 @@
-use std::io::Write as _;
-use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::Context as _;
+use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct OpenAiConfig {
-    pub bin: String,
-    pub model: Option<String>,
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
     pub reasoning_effort: Option<String>,
 }
 
 impl OpenAiConfig {
-    pub fn from_env() -> Self {
-        let bin = std::env::var("SITEBOOKIFY_OPENAI_BIN").unwrap_or_else(|_| "openai".to_owned());
-        let model = std::env::var("SITEBOOKIFY_OPENAI_MODEL").ok();
+    pub fn from_env() -> anyhow::Result<Self> {
+        let api_key = std::env::var("SITEBOOKIFY_OPENAI_API_KEY")
+            .or_else(|_| std::env::var("OPENAI_API_KEY"))
+            .context(
+                "missing OpenAI API key: set OPENAI_API_KEY (or SITEBOOKIFY_OPENAI_API_KEY)",
+            )?;
+
+        let base_url = std::env::var("SITEBOOKIFY_OPENAI_BASE_URL")
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_owned());
+
+        let model = std::env::var("SITEBOOKIFY_OPENAI_MODEL")
+            .or_else(|_| std::env::var("OPENAI_MODEL"))
+            .unwrap_or_else(|_| "gpt-4o-mini".to_owned());
+
         let reasoning_effort = std::env::var("SITEBOOKIFY_OPENAI_REASONING_EFFORT").ok();
-        Self {
-            bin,
+
+        Ok(Self {
+            api_key,
+            base_url,
             model,
             reasoning_effort,
-        }
+        })
     }
 }
 
-pub fn exec_readonly(prompt: &str, config: &OpenAiConfig) -> anyhow::Result<String> {
-    let output = tempfile::NamedTempFile::new().context("create openai output temp file")?;
-    let output_path = output.path();
+#[derive(Debug, Serialize)]
+struct ResponsesRequest<'a> {
+    model: &'a str,
+    input: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<Reasoning<'a>>,
+}
 
-    let mut cmd = Command::new(&config.bin);
-    if let Some(model) = config.model.as_deref() {
-        cmd.args(["--model", model]);
-    }
-    if let Some(reasoning_effort) = config.reasoning_effort.as_deref() {
-        let reasoning_effort_arg = format!("model_reasoning_effort=\"{reasoning_effort}\"");
-        cmd.args(["--config", &reasoning_effort_arg]);
-    }
-    cmd.args([
-        "exec",
-        "-",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-        "--color",
-        "never",
-        "--output-last-message",
-    ]);
-    cmd.arg(output_path);
+#[derive(Debug, Serialize)]
+struct Reasoning<'a> {
+    effort: &'a str,
+}
+
+pub fn exec_readonly(prompt: &str, config: &OpenAiConfig) -> anyhow::Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()
+        .context("build openai http client")?;
+
+    let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
 
     tracing::info!(
-        bin = %config.bin,
-        model = ?config.model,
+        base_url = %config.base_url,
+        model = %config.model,
         reasoning_effort = ?config.reasoning_effort,
-        "openai cli exec"
+        "openai responses api"
     );
 
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .with_context(|| format!("spawn openai cli: {}", config.bin))?;
+    let request = ResponsesRequest {
+        model: &config.model,
+        input: prompt,
+        reasoning: config
+            .reasoning_effort
+            .as_deref()
+            .map(|effort| Reasoning { effort }),
+    };
 
-    {
-        let mut stdin = child.stdin.take().context("open openai stdin")?;
-        stdin
-            .write_all(prompt.as_bytes())
-            .context("write openai stdin")?;
+    let response = client
+        .post(url)
+        .bearer_auth(&config.api_key)
+        .json(&request)
+        .send()
+        .context("POST /responses")?;
+
+    let status = response.status();
+    let body = response.text().context("read openai response body")?;
+
+    if !status.is_success() {
+        if let Ok(value) = serde_json::from_str::<Value>(&body)
+            && let Some(message) = value.pointer("/error/message").and_then(|v| v.as_str())
+        {
+            anyhow::bail!("openai responses api failed ({status}): {message}");
+        }
+        anyhow::bail!("openai responses api failed ({status}): {body}");
     }
 
-    let status = child.wait().context("wait openai")?;
-    if !status.success() {
-        anyhow::bail!("openai cli failed ({status})");
+    let value: Value = serde_json::from_str(&body).context("parse openai responses json")?;
+    extract_output_text(&value).context("extract openai output text")
+}
+
+fn extract_output_text(value: &Value) -> anyhow::Result<String> {
+    if let Some(text) = value.get("output_text").and_then(|v| v.as_str()) {
+        return Ok(text.to_owned());
     }
 
-    std::fs::read_to_string(output_path).context("read openai last message")
+    let Some(output) = value.get("output").and_then(|v| v.as_array()) else {
+        anyhow::bail!("missing `output` in openai responses json");
+    };
+
+    let mut parts = Vec::new();
+    for item in output {
+        let Some(content) = item.get("content").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for chunk in content {
+            if let Some(text) = chunk.get("text").and_then(|v| v.as_str()) {
+                parts.push(text);
+                continue;
+            }
+            if let Some(text) = chunk.get("output_text").and_then(|v| v.as_str()) {
+                parts.push(text);
+                continue;
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        anyhow::bail!("missing output text in openai responses json");
+    }
+
+    Ok(parts.join(""))
 }

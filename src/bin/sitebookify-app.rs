@@ -157,9 +157,9 @@ async fn try_main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
-    if args.web_dir.exists() {
-        let index = args.web_dir.join("index.html");
-        let static_files = ServeDir::new(args.web_dir).not_found_service(ServeFile::new(index));
+    let web_index = args.web_dir.join("index.html");
+    if web_index.exists() {
+        let static_files = ServeDir::new(args.web_dir).not_found_service(ServeFile::new(web_index));
         app = app.fallback_service(static_files);
     } else {
         app = app.fallback(|| async {
