@@ -1,3 +1,9 @@
 project_id      = "your-gcp-project-id"
 region          = "asia-northeast1"
-container_image = "asia-northeast1-docker.pkg.dev/your-gcp-project-id/sitebookify/sitebookify-app:latest"
+# Tip: avoid fixed tags like `latest` when deploying via Terraform.
+container_image = "asia-northeast1-docker.pkg.dev/your-gcp-project-id/sitebookify/sitebookify-app:git-<short-sha>"
+# OpenAI (choose one):
+# - Recommended: use Secret Manager and set `openai_api_key_secret_id`
+# - Quick test: set `openai_api_key` (NOT recommended; ends up in terraform state)
+# openai_api_key_secret_id = "sitebookify-openai-api-key"
+# openai_api_key           = "sk-..." # do not commit real key

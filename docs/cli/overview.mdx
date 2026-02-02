@@ -15,7 +15,7 @@ nix develop -c cargo build --release
 If you want to run via Cargo:
 
 ```sh
-nix develop -c cargo run -- crawl --url https://example.com/docs/ --out raw
+nix develop -c cargo run -- crawl --url https://agentskills.io/ --out raw
 ```
 
 ## Workflow
@@ -39,7 +39,7 @@ Run the full pipeline (crawl → extract → manifest → toc create → book (i
 
 ```sh
 sitebookify build \
-  --url https://example.com/docs/ \
+  --url https://agentskills.io/ \
   --out workspace \
   --language 日本語 \
   --tone 丁寧
@@ -66,7 +66,7 @@ Notes (MVP):
 - `--toc-engine` and `--render-engine` accept `openai` or `noop` (default: `openai`).
 - OpenAI settings (API):
   - `OPENAI_API_KEY` (required; or `SITEBOOKIFY_OPENAI_API_KEY`)
-  - `SITEBOOKIFY_OPENAI_MODEL` (default: `gpt5.2`)
+  - `SITEBOOKIFY_OPENAI_MODEL` (default: `gpt-5.2`)
   - `SITEBOOKIFY_OPENAI_REASONING_EFFORT` (default: `medium`; e.g. `minimal`, `low`, `medium`, `high`, `xhigh`)
 
 ### `crawl`
@@ -75,7 +75,7 @@ Fetch pages under the start URL and save HTML into a Raw snapshot directory.
 
 ```sh
 sitebookify crawl \
-  --url https://example.com/docs/ \
+  --url https://agentskills.io/ \
   --out raw
 ```
 

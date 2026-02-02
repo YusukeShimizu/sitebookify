@@ -29,7 +29,7 @@ export default function App() {
     return createClient(SitebookifyService, transport);
   }, []);
 
-  const [url, setUrl] = useState("https://example.com/docs/");
+  const [url, setUrl] = useState("https://agentskills.io/");
   const [languageCode, setLanguageCode] = useState("日本語");
   const [tone, setTone] = useState("丁寧");
   const [tocEngine, setTocEngine] = useState<Engine>(Engine.NOOP);
@@ -37,14 +37,14 @@ export default function App() {
   const [outputView, setOutputView] = useState<"preview" | "raw">("preview");
   const [{ jobName, job, bookMd, bookMdLoading, copied, error, busy }, setState] =
     useState<UiState>({
-    jobName: null,
-    job: null,
-    bookMd: null,
-    bookMdLoading: false,
-    error: null,
-    busy: false,
-    copied: false,
-  });
+      jobName: null,
+      job: null,
+      bookMd: null,
+      bookMdLoading: false,
+      error: null,
+      busy: false,
+      copied: false,
+    });
 
   const canStart = url.trim().length > 0 && !busy;
 
@@ -237,7 +237,7 @@ export default function App() {
           <div className="row">
             <input
               type="url"
-              placeholder="https://example.com/docs/"
+              placeholder="https://agentskills.io/"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               onKeyDown={(e) => {

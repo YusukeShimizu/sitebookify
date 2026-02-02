@@ -7,6 +7,9 @@ locals {
   bucket_location = coalesce(var.bucket_location, var.region)
 
   cloud_run_service_agent = "service-${data.google_project.current.number}@serverless-robot-prod.iam.gserviceaccount.com"
+
+  openai_api_key           = var.openai_api_key == null ? null : trimspace(var.openai_api_key)
+  openai_api_key_secret_id = var.openai_api_key_secret_id == null ? null : trimspace(var.openai_api_key_secret_id)
 }
 
 resource "google_project_service" "required" {
@@ -15,6 +18,7 @@ resource "google_project_service" "required" {
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "run.googleapis.com",
+    "secretmanager.googleapis.com",
     "storage.googleapis.com",
   ])
 
@@ -52,6 +56,15 @@ resource "google_service_account_iam_member" "runtime_token_creator_self" {
   service_account_id = google_service_account.runtime.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_openai_key_accessor" {
+  count = local.openai_api_key_secret_id == null || local.openai_api_key_secret_id == "" ? 0 : 1
+
+  project   = var.project_id
+  secret_id = local.openai_api_key_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
 }
 
 resource "google_storage_bucket" "artifacts" {
@@ -109,6 +122,27 @@ resource "google_cloud_run_v2_service" "sitebookify" {
         name  = "SITEBOOKIFY_SIGNED_URL_TTL_SECS"
         value = tostring(var.signed_url_ttl_secs)
       }
+
+      dynamic "env" {
+        for_each = local.openai_api_key_secret_id == null || local.openai_api_key_secret_id == "" ? [] : [local.openai_api_key_secret_id]
+        content {
+          name = "SITEBOOKIFY_OPENAI_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      dynamic "env" {
+        for_each = (local.openai_api_key_secret_id != null && local.openai_api_key_secret_id != "") || local.openai_api_key == null || local.openai_api_key == "" ? [] : [local.openai_api_key]
+        content {
+          name  = "SITEBOOKIFY_OPENAI_API_KEY"
+          value = env.value
+        }
+      }
     }
   }
 
@@ -120,6 +154,7 @@ resource "google_cloud_run_v2_service" "sitebookify" {
   depends_on = [
     google_project_service.required,
     google_artifact_registry_repository_iam_member.cloud_run_service_agent_reader,
+    google_secret_manager_secret_iam_member.runtime_openai_key_accessor,
   ]
 }
 

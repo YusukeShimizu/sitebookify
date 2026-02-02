@@ -322,7 +322,7 @@ message JobSpec {
   // Starting URL to crawl.
   //
   // Format:
-  // - `https://example.com/docs/`
+  // - `https://agentskills.io/`
   string source_url = 1 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
