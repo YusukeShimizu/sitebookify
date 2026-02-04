@@ -3,8 +3,9 @@
 このディレクトリは `sitebookify-app` を **GCP** 上で動かすための IaC（Terraform）を置く。
 
 - Terraform: `infra/terraform/`
-- 現状の実装: `sitebookify-app` は生成物（zip）をローカル FS（`--data-dir`）に作って `/artifacts/:job_id` で配信する。
-  - `infra/terraform/cloudrun-public-gcs/` は **GCS 保存＋署名付き URL** を見据えたリソース（バケット/権限/環境変数）も作る（アプリ側対応は別途）。
+- ローカル実行: `sitebookify-app` は生成物（zip）をローカル FS（`--data-dir`）に作って `/artifacts/:job_id` で配信する。
+- Cloud Run（`infra/terraform/cloudrun-public-gcs/`）: 生成物は **GCS に保存**し、ダウンロードは **署名付き URL**（デフォルト TTL: 3600 秒）を返す。
+  - オブジェクト削除は GCS ライフサイクルで `age = 1`（日）としている。
 
 ## 先に GCP 側で用意するもの（必須）
 
