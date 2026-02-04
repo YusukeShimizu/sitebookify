@@ -21,7 +21,7 @@ use tower::ServiceBuilder;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
-use sitebookify::app::artifact_store::{ArtifactStore, LocalFsArtifactStore};
+use sitebookify::app::artifact_store::{ArtifactStore, GcsArtifactStore, LocalFsArtifactStore};
 use sitebookify::app::job_store::{JobStore, LocalFsJobStore};
 use sitebookify::app::model::{Job, JobStatus, StartJobRequest};
 use sitebookify::app::queue::InProcessQueue;
@@ -66,6 +66,8 @@ struct AppArgs {
 struct AppState {
     base_dir: PathBuf,
     job_store: Arc<dyn JobStore>,
+    artifact_store: Arc<dyn ArtifactStore>,
+    signed_url_ttl_secs: u32,
     queue: InProcessQueue,
     runner: Arc<JobRunner>,
 }
@@ -86,8 +88,26 @@ async fn try_main() -> anyhow::Result<()> {
     tracing::info!(?args, "starting sitebookify-app");
 
     let job_store: Arc<dyn JobStore> = Arc::new(LocalFsJobStore::new(&args.data_dir));
-    let artifact_store: Arc<dyn ArtifactStore> =
-        Arc::new(LocalFsArtifactStore::new(&args.data_dir));
+    let artifact_bucket = std::env::var("SITEBOOKIFY_ARTIFACT_BUCKET")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let signed_url_ttl_secs = std::env::var("SITEBOOKIFY_SIGNED_URL_TTL_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|v| *v >= 60 && *v <= 604_800)
+        .unwrap_or(3600);
+
+    let artifact_store: Arc<dyn ArtifactStore> = match &artifact_bucket {
+        Some(bucket) => {
+            tracing::info!(bucket = %bucket, signed_url_ttl_secs, "using GCS artifact store");
+            Arc::new(GcsArtifactStore::new(args.data_dir.clone(), bucket.clone()))
+        }
+        None => {
+            tracing::info!(signed_url_ttl_secs, "using local filesystem artifact store");
+            Arc::new(LocalFsArtifactStore::new(args.data_dir.clone()))
+        }
+    };
     let runner = Arc::new(JobRunner::new(
         Arc::clone(&job_store),
         Arc::clone(&artifact_store),
@@ -95,6 +115,8 @@ async fn try_main() -> anyhow::Result<()> {
     let state = AppState {
         base_dir: args.data_dir,
         job_store,
+        artifact_store,
+        signed_url_ttl_secs,
         queue: InProcessQueue::new(args.max_concurrency),
         runner,
     };
@@ -208,6 +230,27 @@ async fn download_artifact(
 
     if job.status != JobStatus::Done {
         return Err(axum::http::StatusCode::CONFLICT);
+    }
+
+    if job
+        .artifact_uri
+        .as_deref()
+        .is_some_and(|uri| uri.starts_with("gs://"))
+    {
+        let url = state
+            .artifact_store
+            .generate_download_url(&job_id, state.signed_url_ttl_secs)
+            .await
+            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let mut resp = Response::new(axum::body::Body::empty());
+        *resp.status_mut() = axum::http::StatusCode::TEMPORARY_REDIRECT;
+        resp.headers_mut().insert(
+            header::LOCATION,
+            HeaderValue::from_str(&url)
+                .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?,
+        );
+        return Ok(resp);
     }
 
     let Some(path) = job.artifact_path else {
@@ -385,6 +428,7 @@ impl SitebookifyService for GrpcSitebookifyService {
             finished_at: None,
             work_dir,
             artifact_path: None,
+            artifact_uri: None,
         };
 
         self.state
@@ -542,9 +586,26 @@ impl SitebookifyService for GrpcSitebookifyService {
             return Err(Status::failed_precondition("artifact not ready"));
         }
 
+        let url = self
+            .state
+            .artifact_store
+            .generate_download_url(&job_id, self.state.signed_url_ttl_secs)
+            .await
+            .map_err(|err| Status::internal(format!("generate download url: {err:#}")))?;
+
+        let expire_time = job
+            .artifact_uri
+            .as_deref()
+            .is_some_and(|uri| uri.starts_with("gs://"))
+            .then(|| {
+                let expires_at = chrono::Utc::now()
+                    + chrono::Duration::seconds(i64::from(self.state.signed_url_ttl_secs));
+                timestamp_from_chrono(expires_at)
+            });
+
         Ok(TonicResponse::new(GenerateJobDownloadUrlResponse {
-            url: format!("/artifacts/{job_id}"),
-            expire_time: None,
+            url,
+            expire_time,
         }))
     }
 }
@@ -661,9 +722,13 @@ fn job_to_pb(job: &Job, start_request: &StartJobRequest) -> PbJob {
     };
 
     let artifact_uri = job
-        .artifact_path
-        .as_ref()
-        .map(|p| format!("file://{}", p.display()))
+        .artifact_uri
+        .clone()
+        .or_else(|| {
+            job.artifact_path
+                .as_ref()
+                .map(|p| format!("file://{}", p.display()))
+        })
         .unwrap_or_default();
 
     PbJob {

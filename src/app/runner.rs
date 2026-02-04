@@ -61,6 +61,7 @@ impl JobRunner {
         job.message = "done".to_string();
         job.finished_at = Some(Utc::now());
         job.artifact_path = Some(artifact_path);
+        job.artifact_uri = Some(self.artifact_store.artifact_uri(job_id));
 
         self.job_store.put(&job).await.context("save job")?;
         Ok(())
