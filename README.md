@@ -256,3 +256,40 @@ Workload Identity Federation の手順は構成に依存する。
 `google-github-actions/auth` のドキュメントに従って設定する。  
 GitHub OIDC 発行者（`https://token.actions.githubusercontent.com`）を許可する。  
 対象リポジトリ（`<owner>/<repo>`）から `GCP_SERVICE_ACCOUNT` を impersonate できるように設定する。
+
+## CD: Cloud Run へ deploy（main push）
+
+`main` への push 時に Cloud Run へデプロイする workflow を用意している。
+
+- Workflow: `.github/workflows/deploy-cloudrun.yml`
+- トリガー: `Image (GCP Artifact Registry)` workflow 完了（`main` push のみ）
+- デプロイ対象: `:sha-<full git sha>` tag のイメージ
+
+GitHub Actions Variables は `image-gcp` と共通。  
+追加で次を設定する。
+
+- `CLOUD_RUN_SERVICE`（Cloud Run の service 名。デフォルトは `sitebookify`）
+
+任意（デプロイ後に smoke test を有効化したい場合）。
+
+- `CLOUD_RUN_SMOKE_TEST`: `true` で `curl` を実行する（デフォルト `false`）
+- `CLOUD_RUN_SMOKE_TEST_PATH`: 例: `/healthz`（デフォルト `/healthz`）
+
+GCP 側で `GCP_SERVICE_ACCOUNT` に次の権限が必要（例）。
+
+- `roles/run.admin`（Cloud Run deploy 用）
+- `roles/iam.serviceAccountUser`（Cloud Run 実行用 SA を使う場合は付与が必要になりがち）
+
+```sh
+PROJECT_ID="<your-project-id>"
+SA_EMAIL="github-actions@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud services enable run.googleapis.com
+
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member "serviceAccount:${SA_EMAIL}" \
+  --role "roles/run.admin"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member "serviceAccount:${SA_EMAIL}" \
+  --role "roles/iam.serviceAccountUser"
+```

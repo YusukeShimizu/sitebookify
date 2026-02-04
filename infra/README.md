@@ -15,8 +15,11 @@
 2) **Terraform を実行できる認証**
 - 手元実行（推奨・最短）: Application Default Credentials を使う
   - `gcloud auth application-default login`
-    - もし `UNAUTHENTICATED ... auth/disable_credentials ...` のようなエラーが出る場合は、`auth/disable_credentials` が有効になっている可能性が高い。
-      - `gcloud config unset auth/disable_credentials`（または `gcloud config set auth/disable_credentials false`）を実行してから、もう一度 `gcloud auth application-default login` を実行する
+    - もし `UNAUTHENTICATED ... auth/disable_credentials ...` のようなエラーが出る。
+      `auth/disable_credentials` が有効な可能性がある。
+      - まず `gcloud config unset auth/disable_credentials` を実行する。
+      - 直らなければ `gcloud config set auth/disable_credentials false` を実行する。
+      - 次に `gcloud auth application-default login` を実行する。
   - `gcloud config set project <PROJECT_ID>`（`PROJECT_ID` は project id。プロジェクト名（表示名）ではない）
   - （推奨）ADC の quota project を揃える: `gcloud auth application-default set-quota-project <PROJECT_ID>`
     - 権限不足（`serviceusage.services.use`）で失敗する場合は、そのプロジェクトに対する権限付与が必要
@@ -61,12 +64,12 @@ $EDITOR terraform.tfvars
 <REGION>-docker.pkg.dev/<PROJECT_ID>/<REPO>/sitebookify-app:<TAG>
 ```
 
-Terraform で Cloud Run を管理する場合、`latest` のような **固定 tag** のまま push しても
-`terraform apply` が差分検知できず、Cloud Run が更新されないことがある（Revision は digest 固定のため）。
+Terraform で Cloud Run を管理する場合、固定 tag（例: `latest`）のまま push すると差分検知できないことがある。
+Revision は digest 固定のため、`terraform apply` でも更新されないことがある。
 そのため **tag を毎回変える（推奨）** か、digest（`@sha256:...`）指定にする。
 
-OpenAI エンジンを使う場合は `openai_api_key_secret_id`（推奨）または `openai_api_key` を設定する
-（詳細は `infra/terraform/cloudrun-public-gcs/README.md` を参照）。
+OpenAI エンジンを使う場合は `openai_api_key_secret_id`（推奨）または `openai_api_key` を設定する。
+詳細は `infra/terraform/cloudrun-public-gcs/README.md` を参照。
 
 ### 1) コンテナを build & push（例: ローカル）
 
@@ -149,6 +152,18 @@ GCP 側の具体手順は構成差が大きいので、まずはリポジトリ�
 
 - `pull_request`: build のみ（push しない）
 - `main` への push / `v*` tag: build + push（上記 Variables が揃っている場合）
+
+## GitHub Actions で Cloud Run へ deploy（任意）
+
+`main` への push 時に Cloud Run を更新したい場合は次を使う。
+
+- Workflow: `.github/workflows/deploy-cloudrun.yml`
+- トリガー: `Image (GCP Artifact Registry)` workflow 完了（`main` push のみ）
+- 追加 Variables:
+  - `CLOUD_RUN_SERVICE`（Terraform の `service_name` と揃える。デフォルトは `sitebookify`）
+
+`GCP_SERVICE_ACCOUNT` には権限が必要。  
+`roles/run.admin` と `roles/iam.serviceAccountUser` を付与する（例）。
 
 ## 運用メモ（最小）
 

@@ -1,0 +1,118 @@
+name: Deploy (Cloud Run)
+
+on:
+  workflow_run:
+    workflows: ["Image (GCP Artifact Registry)"]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudrun-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  GAR_REPOSITORY: ${{ vars.GAR_REPOSITORY }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+  CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE || 'sitebookify' }}
+
+  IMAGE_NAME: sitebookify-app
+  GAR_HOST: ${{ vars.GCP_REGION }}-docker.pkg.dev
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+  CLOUD_RUN_SMOKE_TEST: ${{ vars.CLOUD_RUN_SMOKE_TEST || 'false' }}
+  CLOUD_RUN_SMOKE_TEST_PATH: ${{ vars.CLOUD_RUN_SMOKE_TEST_PATH || '/healthz' }}
+
+jobs:
+  deploy:
+    name: Deploy image to Cloud Run (main)
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main') ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Check GCP deploy configuration
+        id: can_deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for v in \
+            GCP_PROJECT_ID \
+            GCP_REGION \
+            GAR_REPOSITORY \
+            GCP_WORKLOAD_IDENTITY_PROVIDER \
+            GCP_SERVICE_ACCOUNT \
+            CLOUD_RUN_SERVICE
+          do
+            if [[ -z "${!v:-}" ]]; then
+              missing+=("${v}")
+            fi
+          done
+
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "ok=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ok=false" >> "${GITHUB_OUTPUT}"
+            echo "missing=${missing[*]}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Skip deploy (missing vars)
+        if: steps.can_deploy.outputs.ok != 'true'
+        run: |
+          echo "Skipping deploy because required GitHub Actions Variables are missing:"
+          echo "${{ steps.can_deploy.outputs.missing }}"
+
+      - name: Authenticate to Google Cloud
+        if: steps.can_deploy.outputs.ok == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        if: steps.can_deploy.outputs.ok == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Deploy to Cloud Run
+        if: steps.can_deploy.outputs.ok == 'true'
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${GAR_HOST}/${GCP_PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:sha-${DEPLOY_SHA}"
+          echo "Deploying ${image} to Cloud Run service '${CLOUD_RUN_SERVICE}' (${GCP_REGION})..."
+
+          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+            --image "${image}" \
+            --region "${GCP_REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --quiet
+
+          url="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+            --region "${GCP_REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --format='value(status.url)')"
+
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+          echo "Deployed URL: ${url}"
+
+      - name: Smoke test
+        if: |
+          steps.deploy.outputs.url != '' &&
+          env.CLOUD_RUN_SMOKE_TEST == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "${{ steps.deploy.outputs.url }}${CLOUD_RUN_SMOKE_TEST_PATH}"
