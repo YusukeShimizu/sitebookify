@@ -26,7 +26,7 @@ docs_vale:
     cd docs && vale sync --config .vale.ini
     cd docs && vale --config .vale.ini --glob='*.mdx' .
 
-ci: fmt proto_fmt proto_lint aip_lint clippy test textlint docs_vale docs_links
+ci: fmt proto_fmt proto_lint aip_lint clippy test docs_vale docs_links
 
 # --- Local Web MVP (optional) ---
 

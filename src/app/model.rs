@@ -27,6 +27,7 @@ pub struct Job {
 
     pub work_dir: PathBuf,
     pub artifact_path: Option<PathBuf>,
+    pub artifact_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
