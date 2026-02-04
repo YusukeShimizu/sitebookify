@@ -21,6 +21,7 @@
   - Job 作成 → job_id を LocalStorage に保存
   - `/jobs/{uuid}` で進捗を表示（ポーリング）
   - 再訪時に「作成中のブックがあります」バナー → `/jobs/{uuid}` に誘導
+  - TOP で「直近 24h のジョブ履歴」一覧を表示（Clear/Remove を含む）
   - 完了時にダウンロードボタンを表示
 - API / Backend（MVP）
   - Preview 用の軽量エンドポイント（sitemap.xml or 1-hop link 収集）
@@ -61,7 +62,7 @@
 
 - `just web_install`
 - `just web_gen`
-- `just web_dev`（または `just web_build` + `just dev_app port=18080`）
+- `just web_dev`（または `just web_build` + `just dev_app 18080`）
 
 ### API（手動 / curl）
 
@@ -94,3 +95,4 @@
 - 2026-02-04: 軽量 Preview の API（`GET /preview?url=...`）と Web UI の Preview ボタンを追加した。
 - 2026-02-04: Preview ロジックを `src/app/preview.rs` に切り出し、ユニットテストを追加した。
 - 2026-02-04: `/jobs/{uuid}` で `book.md` / download が Loading のままになる不具合を修正した（useEffect の依存配列を修正）。
+- 2026-02-04: TOP に「直近 24h のジョブ履歴」一覧を追加し、LocalStorage の prune を保存するようにした（履歴の上限も拡張）。

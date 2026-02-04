@@ -6,7 +6,14 @@ import {
   Engine,
   SitebookifyService,
 } from "../gen/sitebookify/v1/service_pb";
-import { getMostRecentJob, upsertJob, type StoredJob } from "../lib/jobHistory";
+import {
+  clearJobs,
+  loadJobs,
+  pruneJobsInStorage,
+  removeJob,
+  upsertJob,
+  type StoredJob,
+} from "../lib/jobHistory";
 
 type Props = {
   client: Client<typeof SitebookifyService>;
@@ -44,6 +51,14 @@ function engineValue(e: string): Engine {
   }
 }
 
+function formatTimestamp(ms: number): string {
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return String(ms);
+  }
+}
+
 export function HomePage({ client, navigate }: Props) {
   const [url, setUrl] = useState("https://agentskills.io/");
   const [languageCode, setLanguageCode] = useState("日本語");
@@ -54,6 +69,7 @@ export function HomePage({ client, navigate }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [jobHistory, setJobHistory] = useState<StoredJob[]>(() => loadJobs());
 
   const canStart = url.trim().length > 0 && !busy;
   const canPreview = url.trim().length > 0 && !busy && !previewLoading;
@@ -61,10 +77,10 @@ export function HomePage({ client, navigate }: Props) {
   const engineLabel =
     tocEngine === Engine.OPENAI || renderEngine === Engine.OPENAI ? "openai" : "noop";
 
-  const [recentJob, setRecentJob] = useState<StoredJob | null>(() => getMostRecentJob());
+  const recentJob = jobHistory.length > 0 ? jobHistory[0] : null;
 
   useEffect(() => {
-    setRecentJob(getMostRecentJob());
+    setJobHistory(pruneJobsInStorage());
   }, []);
 
   const banner = useMemo(() => {
@@ -81,6 +97,19 @@ export function HomePage({ client, navigate }: Props) {
         : `job_id: ${recentJob.jobId}`;
     return { title, subtitle, jobId: recentJob.jobId };
   }, [recentJob]);
+
+  function refreshHistory() {
+    setJobHistory(pruneJobsInStorage());
+  }
+
+  function clearHistory() {
+    clearJobs();
+    setJobHistory([]);
+  }
+
+  function removeFromHistory(jobId: string) {
+    setJobHistory(removeJob(jobId));
+  }
 
   async function start() {
     setState({ busy: true, error: null });
@@ -119,8 +148,8 @@ export function HomePage({ client, navigate }: Props) {
         progressPercent: 0,
         message: "queued",
       };
-      upsertJob(stored);
-      setRecentJob(stored);
+      const nextHistory = upsertJob(stored);
+      setJobHistory(nextHistory);
 
       navigate(`/jobs/${jobId}`);
     } catch (e) {
@@ -301,6 +330,72 @@ export function HomePage({ client, navigate }: Props) {
             <span className="error">{error}</span>
           </div>
         ) : null}
+      </div>
+
+      <div className="card">
+        <div className="row wrap">
+          <span className="pill">history</span>
+          <span className="muted">ブラウザに保存 • 24h で自動削除</span>
+          <button className="small" type="button" onClick={refreshHistory}>
+            Refresh
+          </button>
+          <button
+            className="small"
+            type="button"
+            onClick={clearHistory}
+            disabled={jobHistory.length === 0}
+          >
+            Clear
+          </button>
+        </div>
+
+        {jobHistory.length === 0 ? (
+          <div className="muted hint">まだ実行履歴がありません。</div>
+        ) : (
+          <div className="status">
+            {jobHistory.map((j) => (
+              <div key={j.jobId} className="historyItem">
+                <div className="row wrap">
+                  <button
+                    className="small"
+                    type="button"
+                    onClick={() => navigate(`/jobs/${j.jobId}`)}
+                  >
+                    Open
+                  </button>
+
+                  <span className="pill">job</span>
+                  <code className="muted">{j.jobId}</code>
+
+                  <span className="pill">status</span>
+                  <span
+                    className={
+                      j.state === "error" ? "error" : j.state === "done" ? "success" : "muted"
+                    }
+                  >
+                    {j.state ?? "unknown"}
+                  </span>
+
+                  {typeof j.progressPercent === "number" ? (
+                    <span className="muted">{j.progressPercent}%</span>
+                  ) : null}
+
+                  <span className="muted">{formatTimestamp(j.createdAtMs)}</span>
+
+                  <button className="small" type="button" onClick={() => removeFromHistory(j.jobId)}>
+                    Remove
+                  </button>
+                </div>
+
+                <div className="muted hint">
+                  {[j.sourceUrl?.trim(), j.message?.trim()]
+                    .filter((v): v is string => Boolean(v && v.length > 0))
+                    .join(" • ") || "—"}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="footer">

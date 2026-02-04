@@ -255,6 +255,13 @@ button.small {
   gap: 10px;
 }
 
+.historyItem {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(17, 26, 51, 0.3);
+  padding: 10px 12px;
+}
+
 .outputText {
   width: 100%;
   min-height: 360px;

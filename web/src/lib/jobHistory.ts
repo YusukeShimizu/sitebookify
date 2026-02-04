@@ -1,6 +1,6 @@
 const STORAGE_KEY = "sitebookify.job_history.v1";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const MAX_ITEMS = 20;
+const MAX_ITEMS = 200;
 
 export type StoredJobState = "queued" | "running" | "done" | "error" | "unknown";
 
@@ -79,7 +79,12 @@ export function loadJobs(nowMs = Date.now()): StoredJob[] {
 export function saveJobs(jobs: StoredJob[]) {
   const list = [...jobs];
   list.sort((a, b) => b.createdAtMs - a.createdAtMs);
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list.slice(0, MAX_ITEMS)));
+  const sliced = list.slice(0, MAX_ITEMS);
+  if (sliced.length === 0) {
+    window.localStorage.removeItem(STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(sliced));
 }
 
 export function upsertJob(update: StoredJob, nowMs = Date.now()): StoredJob[] {
@@ -88,6 +93,26 @@ export function upsertJob(update: StoredJob, nowMs = Date.now()): StoredJob[] {
   next.unshift(update);
   saveJobs(next);
   return next;
+}
+
+export function removeJob(jobId: string, nowMs = Date.now()): StoredJob[] {
+  const id = jobId.trim();
+  if (id.length === 0) return loadJobs(nowMs);
+
+  const existing = loadJobs(nowMs);
+  const next = existing.filter((j) => j.jobId !== id);
+  saveJobs(next);
+  return next;
+}
+
+export function clearJobs() {
+  window.localStorage.removeItem(STORAGE_KEY);
+}
+
+export function pruneJobsInStorage(nowMs = Date.now()): StoredJob[] {
+  const jobs = loadJobs(nowMs);
+  saveJobs(jobs);
+  return jobs;
 }
 
 export function getMostRecentJob(nowMs = Date.now()): StoredJob | null {
@@ -101,4 +126,3 @@ export function getJobById(jobId: string, nowMs = Date.now()): StoredJob | null 
   const jobs = loadJobs(nowMs);
   return jobs.find((j) => j.jobId === id) ?? null;
 }
-
