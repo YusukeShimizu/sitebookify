@@ -10,7 +10,7 @@
 
 - 課金 / 認証 / 利用規約同意 / ユーザ管理（永続）を導入しない。
 - 24 時間での完全削除をローカル FS 実装で厳密に保証しない（Cloud Run + GCS lifecycle / TTL DB を前提にする）。
-- SSE / WebSocket による push 通知は今回はやらず、ポーリングで成立させる。
+- SSE / WebSocket による push 通知はやらず、今回はポーリングで成立させる。
 
 ## Scope
 
@@ -93,3 +93,4 @@
 - 2026-02-04: Web を `/` と `/jobs/{uuid}` の 2 画面に分割し、LocalStorage に job 履歴を保持するようにした。
 - 2026-02-04: 軽量 Preview の API（`GET /preview?url=...`）と Web UI の Preview ボタンを追加した。
 - 2026-02-04: Preview ロジックを `src/app/preview.rs` に切り出し、ユニットテストを追加した。
+- 2026-02-04: `/jobs/{uuid}` で `book.md` / download が Loading のままになる不具合を修正した（useEffect の依存配列を修正）。

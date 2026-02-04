@@ -164,7 +164,7 @@ export function JobPage({ client, jobId, navigate }: Props) {
       stopped = true;
       controller.abort();
     };
-  }, [cleanJobId, job?.state, bookMd, bookMdLoading]);
+  }, [cleanJobId, job?.state]);
 
   useEffect(() => {
     if (!cleanJobId) return;
@@ -188,7 +188,7 @@ export function JobPage({ client, jobId, navigate }: Props) {
     return () => {
       stopped = true;
     };
-  }, [client, cleanJobId, download, downloadLoading, job?.state, jobResourceName]);
+  }, [client, job?.state, jobResourceName]);
 
   async function copyBookMd() {
     if (!bookMd) return;
