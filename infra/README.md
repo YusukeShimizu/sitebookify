@@ -15,7 +15,14 @@
 2) **Terraform を実行できる認証**
 - 手元実行（推奨・最短）: Application Default Credentials を使う
   - `gcloud auth application-default login`
-  - `gcloud config set project <PROJECT_ID>`
+    - もし `UNAUTHENTICATED ... auth/disable_credentials ...` のようなエラーが出る。
+      `auth/disable_credentials` が有効な可能性がある。
+      - まず `gcloud config unset auth/disable_credentials` を実行する。
+      - 直らなければ `gcloud config set auth/disable_credentials false` を実行する。
+      - 次に `gcloud auth application-default login` を実行する。
+  - `gcloud config set project <PROJECT_ID>`（`PROJECT_ID` は project id。プロジェクト名（表示名）ではない）
+  - （推奨）ADC の quota project を揃える: `gcloud auth application-default set-quota-project <PROJECT_ID>`
+    - 権限不足（`serviceusage.services.use`）で失敗する場合は、そのプロジェクトに対する権限付与が必要
 - もしくは CI 用の Service Account を作って `GOOGLE_APPLICATION_CREDENTIALS` で渡す
 
 3) **コンテナイメージ（Artifact Registry へ push できる状態）**
@@ -33,6 +40,7 @@ Terraform: `infra/terraform/cloudrun-public-gcs/`
   - `artifactregistry.googleapis.com`
   - `iam.googleapis.com`
   - `iamcredentials.googleapis.com`
+  - `secretmanager.googleapis.com`
 - Artifact Registry (Docker) リポジトリ
 - Cloud Run（`allUsers` に `roles/run.invoker` 付与 = 公開）
 - Cloud Run 実行用 Service Account（最小権限寄せ）
@@ -50,11 +58,18 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-`container_image` は次の形式で指定する（例は次の通り）。
+`container_image` は次の形式で指定する。
 
 ```text
-<REGION>-docker.pkg.dev/<PROJECT_ID>/<REPO>/sitebookify-app:latest
+<REGION>-docker.pkg.dev/<PROJECT_ID>/<REPO>/sitebookify-app:<TAG>
 ```
+
+Terraform で Cloud Run を管理する場合、固定 tag（例: `latest`）のまま push すると差分検知できないことがある。
+Revision は digest 固定のため、`terraform apply` でも更新されないことがある。
+そのため **tag を毎回変える（推奨）** か、digest（`@sha256:...`）指定にする。
+
+OpenAI エンジンを使う場合は `openai_api_key_secret_id`（推奨）または `openai_api_key` を設定する。
+詳細は `infra/terraform/cloudrun-public-gcs/README.md` を参照。
 
 ### 1) コンテナを build & push（例: ローカル）
 
@@ -68,17 +83,27 @@ $EDITOR terraform.tfvars
 > ```
 
 ```sh
+cd "$(git rev-parse --show-toplevel)" # repo root (Dockerfile is here)
+
 PROJECT_ID="<your-project-id>"
 REGION="<your-region>" # 例: asia-northeast1
 AR_REPO="sitebookify"
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/sitebookify-app:latest"
+TAG="git-$(git rev-parse --short HEAD)" # 例: git-a1b2c3d（固定 tag を避ける）
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/sitebookify-app:${TAG}"
 
+gcloud config set project "${PROJECT_ID}"
 gcloud auth configure-docker "${REGION}-docker.pkg.dev"
-docker build -t "${IMAGE}" .
-docker push "${IMAGE}"
+
+# Apple Silicon などで build が失敗する場合は linux/amd64 を指定する（Dockerfile が x86_64 の buf を使うため）
+docker buildx build --platform linux/amd64 -t "${IMAGE}" --push .
+# もしくは（x86_64 環境など）:
+# docker build -t "${IMAGE}" .
+# docker push "${IMAGE}"
 ```
 
 ### 2) Terraform apply
+
+`terraform.tfvars` の `container_image` も、今 push した `${IMAGE}` に更新してから apply する。
 
 ```sh
 cd infra/terraform/cloudrun-public-gcs
@@ -127,6 +152,18 @@ GCP 側の具体手順は構成差が大きいので、まずはリポジトリ�
 
 - `pull_request`: build のみ（push しない）
 - `main` への push / `v*` tag: build + push（上記 Variables が揃っている場合）
+
+## GitHub Actions で Cloud Run へ deploy（任意）
+
+`main` への push 時に Cloud Run を更新したい場合は次を使う。
+
+- Workflow: `.github/workflows/deploy-cloudrun.yml`
+- トリガー: `Image (GCP Artifact Registry)` workflow 完了（`main` push のみ）
+- 追加 Variables:
+  - `CLOUD_RUN_SERVICE`（Terraform の `service_name` と揃える。デフォルトは `sitebookify`）
+
+`GCP_SERVICE_ACCOUNT` には権限が必要。  
+`roles/run.admin` と `roles/iam.serviceAccountUser` を付与する（例）。
 
 ## 運用メモ（最小）
 

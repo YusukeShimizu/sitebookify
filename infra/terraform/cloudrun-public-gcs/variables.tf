@@ -19,6 +19,21 @@ variable "container_image" {
   description = "Container image URL to deploy to Cloud Run."
 }
 
+variable "openai_api_key" {
+  type        = string
+  default     = null
+  nullable    = true
+  sensitive   = true
+  description = "Optional (not recommended). OpenAI API key for the app. Passed to Cloud Run as SITEBOOKIFY_OPENAI_API_KEY. Note: secrets passed via Terraform will be stored in terraform state. Prefer `openai_api_key_secret_id`."
+}
+
+variable "openai_api_key_secret_id" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Optional (recommended). Secret Manager secret id for the OpenAI API key (e.g. \"sitebookify-openai-api-key\"). If set, Cloud Run reads it via Secret Manager as SITEBOOKIFY_OPENAI_API_KEY (version=latest)."
+}
+
 variable "artifact_registry_repository_id" {
   type        = string
   default     = "sitebookify"

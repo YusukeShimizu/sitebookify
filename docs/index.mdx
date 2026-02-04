@@ -13,7 +13,7 @@ One-shot example:
 
 ```sh
 sitebookify build \
-  --url https://example.com/docs/ \
+  --url https://agentskills.io/ \
   --out workspace \
   --language 日本語 \
   --tone 丁寧
@@ -23,7 +23,7 @@ sitebookify build \
 Notes:
 
 - TOC creation and section rewrites use OpenAI (Responses API) by default (`--toc-engine openai --render-engine openai`).
-  - Configure via `OPENAI_API_KEY` (or `SITEBOOKIFY_OPENAI_API_KEY`). Defaults: `SITEBOOKIFY_OPENAI_MODEL=gpt5.2`, `SITEBOOKIFY_OPENAI_REASONING_EFFORT=medium` (override via env vars).
+  - Configure via `OPENAI_API_KEY` (or `SITEBOOKIFY_OPENAI_API_KEY`). Defaults: `SITEBOOKIFY_OPENAI_MODEL=gpt-5.2`, `SITEBOOKIFY_OPENAI_REASONING_EFFORT=medium` (override via env vars).
 - For a deterministic run without an LLM, set `--toc-engine noop --render-engine noop`.
 
 Next: [CLI overview](/cli/overview)
@@ -48,7 +48,7 @@ nix develop -c cargo build --release
 Run (from source):
 
 ```sh
-nix develop -c cargo run -- crawl --url https://example.com/docs/ --out raw
+nix develop -c cargo run -- crawl --url https://agentskills.io/ --out raw
 ```
 
 ## CI checks

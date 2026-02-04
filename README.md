@@ -75,9 +75,9 @@ rust-analyzer が標準ライブラリ（`std`）を解析できるように、�
 ## 実行例
 
 ```sh
-sitebookify build --url https://example.com/docs/ --out workspace
+sitebookify build --url https://agentskills.io/ --out workspace
 # --title は任意（省略時は toc.yaml / LLM から自動決定）
-# sitebookify build --url https://example.com/docs/ --out workspace --title "Example Docs Textbook"
+# sitebookify build --url https://agentskills.io/ --out workspace --title "Example Docs Textbook"
 ```
 
 TOC 作成と本文の書き換えは OpenAI API（Responses API）を利用する。
@@ -85,18 +85,18 @@ TOC 作成と本文の書き換えは OpenAI API（Responses API）を利用す�
 
 ```sh
 # 言語とトーンを指定できる（ニュアンス可変）
-sitebookify build --url https://example.com/docs/ --out workspace --language 日本語 --tone 丁寧
+sitebookify build --url https://agentskills.io/ --out workspace --language 日本語 --tone 丁寧
 ```
 
 OpenAI エンジン（Responses API）の API キーやモデルは環境変数で指定できる。  
-デフォルトは `SITEBOOKIFY_OPENAI_MODEL=gpt5.2`、`SITEBOOKIFY_OPENAI_REASONING_EFFORT=medium`。
+デフォルトは `SITEBOOKIFY_OPENAI_MODEL=gpt-5.2`、`SITEBOOKIFY_OPENAI_REASONING_EFFORT=medium`。
 
 ```sh
 echo 'export OPENAI_API_KEY=...' > .envrc.local
 # もしくは: echo 'export SITEBOOKIFY_OPENAI_API_KEY=...' > .envrc.local
 # 任意: デフォルト値を上書きする場合のみ指定
 # 例: モデルや reasoning effort を変更する
-echo 'export SITEBOOKIFY_OPENAI_MODEL=gpt5.2' >> .envrc.local
+echo 'export SITEBOOKIFY_OPENAI_MODEL=gpt-5.2' >> .envrc.local
 echo 'export SITEBOOKIFY_OPENAI_REASONING_EFFORT=high' >> .envrc.local
 direnv allow
 ```
@@ -117,7 +117,7 @@ workspace/
 手動で実行したい場合は、次の順に実行する。
 
 ```sh
-sitebookify crawl --url https://example.com/docs/ --out raw
+sitebookify crawl --url https://agentskills.io/ --out raw
 sitebookify extract --raw raw --out extracted
 sitebookify manifest --extracted extracted --out manifest.jsonl
 sitebookify toc create --manifest manifest.jsonl --out toc.yaml --language 日本語 --tone 丁寧 --engine openai
@@ -189,7 +189,7 @@ sitebookify book bundle --book book --out book.md
 ```sh
 echo 'export RUST_LOG=debug' > .envrc.local
 direnv allow
-sitebookify crawl --url https://example.com/docs/ --out raw
+sitebookify crawl --url https://agentskills.io/ --out raw
 ```
 
 ## Protobuf（Buf）
@@ -256,3 +256,40 @@ Workload Identity Federation の手順は構成に依存する。
 `google-github-actions/auth` のドキュメントに従って設定する。  
 GitHub OIDC 発行者（`https://token.actions.githubusercontent.com`）を許可する。  
 対象リポジトリ（`<owner>/<repo>`）から `GCP_SERVICE_ACCOUNT` を impersonate できるように設定する。
+
+## CD: Cloud Run へ deploy（main push）
+
+`main` への push 時に Cloud Run へデプロイする workflow を用意している。
+
+- Workflow: `.github/workflows/deploy-cloudrun.yml`
+- トリガー: `Image (GCP Artifact Registry)` workflow 完了（`main` push のみ）
+- デプロイ対象: `:sha-<full git sha>` tag のイメージ
+
+GitHub Actions Variables は `image-gcp` と共通。  
+追加で次を設定する。
+
+- `CLOUD_RUN_SERVICE`（Cloud Run の service 名。デフォルトは `sitebookify`）
+
+任意（デプロイ後に smoke test を有効化したい場合）。
+
+- `CLOUD_RUN_SMOKE_TEST`: `true` で `curl` を実行する（デフォルト `false`）
+- `CLOUD_RUN_SMOKE_TEST_PATH`: 例: `/healthz`（デフォルト `/healthz`）
+
+GCP 側で `GCP_SERVICE_ACCOUNT` に次の権限が必要（例）。
+
+- `roles/run.admin`（Cloud Run deploy 用）
+- `roles/iam.serviceAccountUser`（Cloud Run 実行用 SA を使う場合は付与が必要になりがち）
+
+```sh
+PROJECT_ID="<your-project-id>"
+SA_EMAIL="github-actions@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud services enable run.googleapis.com
+
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member "serviceAccount:${SA_EMAIL}" \
+  --role "roles/run.admin"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member "serviceAccount:${SA_EMAIL}" \
+  --role "roles/iam.serviceAccountUser"
+```
