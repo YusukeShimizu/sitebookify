@@ -4,7 +4,9 @@
 
 - Terraform: `infra/terraform/`
 - ローカル実行: `sitebookify-app` は生成物（zip）をローカル FS（`--data-dir`）に作って `/artifacts/:job_id` で配信する。
-- Cloud Run（`infra/terraform/cloudrun-public-gcs/`）: 生成物は **GCS に保存**し、ダウンロードは **署名付き URL**（デフォルト TTL: 3600 秒）を返す。
+- Cloud Run（`infra/terraform/cloudrun-public-gcs/`）:
+  - 生成物は **GCS に保存**する。
+  - ダウンロードは **署名付き URL** を返す（デフォルト TTL: 3600 秒）。
   - オブジェクト削除は GCS ライフサイクルで `age = 1`（日）としている。
 
 ## 先に GCP 側で用意するもの（必須）

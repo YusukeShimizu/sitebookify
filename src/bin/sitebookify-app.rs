@@ -4,14 +4,17 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::error_handling::HandleErrorLayer;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::http::header;
+use axum::response::IntoResponse;
+use axum::response::Json;
 use axum::response::{Html, Response};
 use axum::routing::get;
 use clap::Parser;
 use http_body_util::BodyExt as _;
+use serde::Deserialize;
 use tokio_util::io::ReaderStream;
 use tonic::{Request, Response as TonicResponse, Status};
 use tower::ServiceBuilder;
@@ -172,6 +175,7 @@ async fn try_main() -> anyhow::Result<()> {
 
     let mut app = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
+        .route("/preview", get(preview_site_handler))
         .route("/artifacts/:job_id", get(download_artifact))
         .route("/jobs/:job_id/book.md", get(download_book_md))
         .route_service("/sitebookify.v1.SitebookifyService/*rest", grpc_service)
@@ -272,6 +276,33 @@ async fn download_artifact(
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?,
     );
     Ok(resp)
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewQuery {
+    url: String,
+}
+
+async fn preview_site_handler(
+    Query(q): Query<PreviewQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let raw = q.url.trim();
+    if raw.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "url is required".to_string()));
+    }
+
+    let url = url::Url::parse(raw).map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("invalid url query parameter: {err}"),
+        )
+    })?;
+    let url = sitebookify::crawl::resolve_start_url_for_crawl(&url).await;
+
+    let preview = sitebookify::app::preview::preview_site(&url)
+        .await
+        .map_err(|err| (StatusCode::BAD_GATEWAY, format!("preview failed: {err:#}")))?;
+    Ok(Json(preview))
 }
 
 async fn download_book_md(

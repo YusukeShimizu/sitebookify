@@ -1,25 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createGrpcWebTransport } from "@connectrpc/connect-web";
-import { anyUnpack } from "@bufbuild/protobuf/wkt";
-import { MarkdownPreview } from "./MarkdownPreview";
-import {
-  CreateJobMetadataSchema,
-  Engine,
-  Job_State,
-  SitebookifyService,
-  type Job,
-} from "./gen/sitebookify/v1/service_pb";
-
-type UiState = {
-  jobName: string | null;
-  job: Job | null;
-  bookMd: string | null;
-  bookMdLoading: boolean;
-  error: string | null;
-  busy: boolean;
-  copied: boolean;
-};
+import { SitebookifyService } from "./gen/sitebookify/v1/service_pb";
+import { parseRoute, usePathname } from "./lib/router";
+import { HomePage } from "./pages/Home";
+import { JobPage } from "./pages/Job";
 
 export default function App() {
   const client = useMemo(() => {
@@ -29,362 +14,37 @@ export default function App() {
     return createClient(SitebookifyService, transport);
   }, []);
 
-  const [url, setUrl] = useState("https://agentskills.io/");
-  const [languageCode, setLanguageCode] = useState("日本語");
-  const [tone, setTone] = useState("丁寧");
-  const [tocEngine, setTocEngine] = useState<Engine>(Engine.NOOP);
-  const [renderEngine, setRenderEngine] = useState<Engine>(Engine.NOOP);
-  const [outputView, setOutputView] = useState<"preview" | "raw">("preview");
-  const [{ jobName, job, bookMd, bookMdLoading, copied, error, busy }, setState] =
-    useState<UiState>({
-      jobName: null,
-      job: null,
-      bookMd: null,
-      bookMdLoading: false,
-      error: null,
-      busy: false,
-      copied: false,
-    });
-
-  const canStart = url.trim().length > 0 && !busy;
-
-  const engineLabel =
-    tocEngine === Engine.OPENAI || renderEngine === Engine.OPENAI ? "openai" : "noop";
-
-  function engineValue(e: string): Engine {
-    const parsed = Number(e);
-    if (!Number.isFinite(parsed)) return Engine.UNSPECIFIED;
-    switch (parsed) {
-      case Engine.NOOP:
-      case Engine.OPENAI:
-      case Engine.UNSPECIFIED:
-        return parsed;
-      default:
-        return Engine.UNSPECIFIED;
-    }
-  }
-
-  function jobIdFromName(name: string): string {
-    return name.startsWith("jobs/") ? name.slice("jobs/".length) : name;
-  }
-
-  async function fetchBookMd(name: string, signal?: AbortSignal): Promise<string> {
-    const jobId = jobIdFromName(name);
-    const resp = await fetch(`/jobs/${jobId}/book.md`, {
-      method: "GET",
-      headers: { Accept: "text/plain" },
-      signal,
-    });
-    if (!resp.ok) {
-      throw new Error(`failed to fetch book.md (${resp.status}): ${await resp.text()}`);
-    }
-    return await resp.text();
-  }
-
-  async function start() {
-    setOutputView("preview");
-    setState((s) => ({
-      ...s,
-      busy: true,
-      error: null,
-      bookMd: null,
-      bookMdLoading: false,
-      copied: false,
-      job: null,
-      jobName: null,
-    }));
-    try {
-      const op = await client.createJob({
-        job: {
-          spec: {
-            sourceUrl: url.trim(),
-            languageCode: languageCode.trim(),
-            tone: tone.trim(),
-            tocEngine,
-            renderEngine,
-          },
-        },
-        jobId: "",
-      });
-
-      const jobNameFromMetadata = op.metadata
-        ? anyUnpack(op.metadata, CreateJobMetadataSchema)?.job ?? null
-        : null;
-      const jobNameFromOp = op.name.startsWith("operations/")
-        ? `jobs/${op.name.slice("operations/".length)}`
-        : null;
-
-      const resolvedJobName = jobNameFromMetadata ?? jobNameFromOp;
-      if (!resolvedJobName) {
-        throw new Error(`CreateJob returned an operation without a job reference: ${op.name}`);
-      }
-
-      setState((s) => ({ ...s, jobName: resolvedJobName, busy: false }));
-    } catch (e) {
-      setState((s) => ({ ...s, busy: false, error: String(e) }));
-    }
-  }
+  const { pathname, navigate, replace } = usePathname();
+  const route = useMemo(() => parseRoute(pathname), [pathname]);
 
   useEffect(() => {
-    if (!jobName) return;
-    if (job?.state === Job_State.ERROR) return;
-    if (job?.state === Job_State.DONE) return;
-    let stopped = false;
-
-    const tick = async () => {
-      try {
-        const j = await client.getJob({ name: jobName });
-        if (stopped) return;
-        setState((s) => ({ ...s, job: j }));
-      } catch (e) {
-        if (stopped) return;
-        setState((s) => ({ ...s, error: String(e) }));
-      }
-    };
-
-    void tick();
-    const id = window.setInterval(() => void tick(), 1500);
-    return () => {
-      stopped = true;
-      window.clearInterval(id);
-    };
-  }, [client, jobName, job?.state]);
-
-  useEffect(() => {
-    if (!jobName) return;
-    if (job?.state !== Job_State.DONE) return;
-    if (bookMd || bookMdLoading) return;
-    let stopped = false;
-    const controller = new AbortController();
-
-    setState((s) => ({ ...s, bookMdLoading: true }));
-    const run = async () => {
-      try {
-        const md = await fetchBookMd(jobName, controller.signal);
-        if (stopped) return;
-        setState((s) => ({ ...s, bookMd: md, bookMdLoading: false }));
-      } catch (e) {
-        if (stopped) return;
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        setState((s) => ({ ...s, bookMdLoading: false, error: String(e) }));
-      }
-    };
-
-    void run();
-    return () => {
-      stopped = true;
-      controller.abort();
-    };
-  }, [jobName, job?.state, bookMd]);
-
-  const statusText = (() => {
-    if (!job) return "—";
-    switch (job.state) {
-      case Job_State.QUEUED:
-        return "queued";
-      case Job_State.RUNNING:
-        return "running";
-      case Job_State.DONE:
-        return "done";
-      case Job_State.ERROR:
-        return "error";
-      default:
-        return "unknown";
+    if (route.kind === "home" && pathname !== "/") {
+      replace("/");
     }
-  })();
-
-  async function copyBookMd() {
-    if (!bookMd) return;
-    try {
-      await navigator.clipboard.writeText(bookMd);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = bookMd;
-      ta.style.position = "fixed";
-      ta.style.top = "0";
-      ta.style.left = "0";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-    }
-
-    setState((s) => ({ ...s, copied: true }));
-    window.setTimeout(() => setState((s) => ({ ...s, copied: false })), 1200);
-  }
+  }, [pathname, replace, route.kind]);
 
   return (
     <div className="container">
       <div className="topbar">
-        <div className="brand">{">_ sitebookify"}</div>
-        <div className="pill">gRPC-Web • local FS • {engineLabel}</div>
+        <a
+          className="brand"
+          href="/"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("/");
+          }}
+        >
+          {">_ sitebookify"}
+        </a>
+        <div className="pill">gRPC-Web • local FS • 24h TTL</div>
       </div>
 
-      <div className="hero">
-        <h1 className="title">
-          Turn docs into a
-          <br />
-          textbook Markdown
-        </h1>
-        <p className="subtitle">
-          Paste a start URL. Sitebookify crawls, extracts, builds an mdBook, then shows the bundled{" "}
-          <code>book.md</code> here so you can review and copy it.
-        </p>
-
-        <div className="card">
-          <div className="row">
-            <input
-              type="url"
-              placeholder="https://agentskills.io/"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && canStart) void start();
-              }}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-            />
-            <button onClick={() => void start()} disabled={!canStart}>
-              {busy ? "Starting…" : "Start"}
-            </button>
-          </div>
-
-          <div className="settings">
-            <div className="row wrap">
-              <span className="pill">toc</span>
-              <select
-                className="control"
-                value={tocEngine}
-                onChange={(e) => setTocEngine(engineValue(e.target.value))}
-              >
-                <option value={Engine.NOOP}>noop</option>
-                <option value={Engine.OPENAI}>openai</option>
-              </select>
-
-              <span className="pill">render</span>
-              <select
-                className="control"
-                value={renderEngine}
-                onChange={(e) => setRenderEngine(engineValue(e.target.value))}
-              >
-                <option value={Engine.NOOP}>noop</option>
-                <option value={Engine.OPENAI}>openai</option>
-              </select>
-            </div>
-
-            <div className="row wrap">
-              <span className="pill">language</span>
-              <input
-                className="control"
-                type="text"
-                value={languageCode}
-                onChange={(e) => setLanguageCode(e.target.value)}
-                placeholder="日本語 / English / …"
-              />
-
-              <span className="pill">tone</span>
-              <input
-                className="control"
-                type="text"
-                value={tone}
-                onChange={(e) => setTone(e.target.value)}
-                placeholder="丁寧 / casual / …"
-              />
-            </div>
-
-            {engineLabel === "openai" ? (
-              <div className="muted hint">
-                OpenAI engine requires the API key on the server (see <code>OPENAI_API_KEY</code> /
-                <code>SITEBOOKIFY_OPENAI_*</code> in README).
-              </div>
-            ) : null}
-          </div>
-
-          <div className="status">
-            <div className="row">
-              <span className="pill">job</span>
-              <span className="muted">{jobName ?? "—"}</span>
-            </div>
-            <div className="row">
-              <span className="pill">status</span>
-              <span className={job?.state === Job_State.ERROR ? "error" : "muted"}>
-                {statusText}
-              </span>
-              {job ? <span className="muted">• {job.message}</span> : null}
-            </div>
-            <div className="row">
-              <span className="pill">url</span>
-              <span className="muted">{job?.spec?.sourceUrl ?? (url.trim() || "—")}</span>
-            </div>
-
-            <div className="progress" aria-label="progress">
-              <div style={{ width: `${job?.progressPercent ?? 0}%` }} />
-            </div>
-            <div className="muted">{job ? `${job.progressPercent}%` : ""}</div>
-
-            {job?.state === Job_State.DONE ? (
-              <div className="output">
-                <div className="row wrap">
-                  <span className="pill success">output</span>
-                  <button
-                    className="small"
-                    onClick={() => void copyBookMd()}
-                    disabled={!bookMd || bookMdLoading}
-                  >
-                    {copied ? "Copied" : "Copy"}
-                  </button>
-                  <div className="segmented">
-                    <button
-                      className={`small ${outputView === "preview" ? "active" : ""}`}
-                      type="button"
-                      onClick={() => setOutputView("preview")}
-                    >
-                      Preview
-                    </button>
-                    <button
-                      className={`small ${outputView === "raw" ? "active" : ""}`}
-                      type="button"
-                      onClick={() => setOutputView("raw")}
-                    >
-                      Markdown
-                    </button>
-                  </div>
-                  {bookMdLoading ? <span className="muted">Loading…</span> : null}
-                </div>
-                {outputView === "preview" ? (
-                  bookMd ? (
-                    <MarkdownPreview markdown={bookMd} />
-                  ) : (
-                    <div className="markdownFrame muted">Waiting for book.md…</div>
-                  )
-                ) : (
-                  <textarea
-                    className="outputText"
-                    readOnly
-                    value={bookMd ?? ""}
-                    placeholder="Waiting for book.md…"
-                  />
-                )}
-              </div>
-            ) : null}
-
-            {error ? (
-              <div className="row">
-                <span className="pill error">error</span>
-                <span className="error">{error}</span>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="footer">
-          Local MVP: `sitebookify-app` stores jobs under <code>workspace-app/jobs</code>. For Cloud Run,
-          swap JobStore/ArtifactStore/Queue.
-        </div>
-      </div>
+      {route.kind === "home" ? (
+        <HomePage client={client} navigate={navigate} />
+      ) : (
+        <JobPage client={client} jobId={route.jobId} navigate={navigate} />
+      )}
     </div>
   );
 }
+
