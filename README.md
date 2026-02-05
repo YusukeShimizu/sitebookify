@@ -112,6 +112,7 @@ workspace/
   book/
   assets/
   book.md
+  book.epub
 ```
 
 手動で実行したい場合は、次の順に実行する。
@@ -180,6 +181,14 @@ just dev_app
 
 ```sh
 sitebookify book bundle --book book --out book.md
+```
+
+## EPUB 出力
+
+`book render` 後に、mdBook 出力を EPUB に変換して出力できる。
+
+```sh
+sitebookify book epub --book book --out book.epub --lang ja
 ```
 
 ## Logging

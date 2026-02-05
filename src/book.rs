@@ -13,7 +13,7 @@ use sha2::Digest as _;
 use sha2::Sha256;
 use url::Url;
 
-use crate::cli::{BookBundleArgs, BookInitArgs, BookRenderArgs, LlmEngine};
+use crate::cli::{BookBundleArgs, BookEpubArgs, BookInitArgs, BookRenderArgs, LlmEngine};
 use crate::formats::{ManifestRecord, Toc};
 use crate::rewrite;
 
@@ -232,6 +232,21 @@ pub fn bundle(args: BookBundleArgs) -> anyhow::Result<()> {
         .with_context(|| format!("flush bundle output: {}", out_path.display()))?;
 
     Ok(())
+}
+
+pub fn epub(args: BookEpubArgs) -> anyhow::Result<()> {
+    let book_dir = PathBuf::from(&args.book);
+    let out_path = PathBuf::from(&args.out);
+
+    crate::epub::create_from_mdbook(
+        &book_dir,
+        &out_path,
+        &crate::epub::CreateEpubOptions {
+            force: args.force,
+            lang: args.lang,
+        },
+    )
+    .context("create epub from mdBook")
 }
 
 fn copy_assets_for_bundle(

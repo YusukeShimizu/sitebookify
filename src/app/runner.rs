@@ -110,6 +110,7 @@ impl JobRunner {
         let toc_path = job.work_dir.join("toc.yaml");
         let book_dir = job.work_dir.join("book");
         let bundled_md_path = job.work_dir.join("book.md");
+        let epub_path = job.work_dir.join("book.epub");
 
         self.update_progress(job, 5, "crawl").await?;
         crate::crawl::run(CrawlArgs {
@@ -179,6 +180,17 @@ impl JobRunner {
             force: false,
         })
         .context("book bundle")?;
+
+        self.update_progress(job, 95, "book epub").await?;
+        crate::epub::create_from_mdbook(
+            &book_dir,
+            &epub_path,
+            &crate::epub::CreateEpubOptions {
+                force: false,
+                lang: crate::epub::guess_lang_tag(&request.language),
+            },
+        )
+        .context("book epub")?;
 
         Ok(())
     }

@@ -5,6 +5,7 @@ pub mod book;
 pub mod build;
 pub mod cli;
 pub mod crawl;
+pub mod epub;
 pub mod extract;
 pub mod formats;
 pub mod google;

@@ -53,6 +53,11 @@ async fn try_main() -> anyhow::Result<()> {
         } => {
             sitebookify::book::bundle(args).context("book bundle")?;
         }
+        sitebookify::cli::Command::Book {
+            command: sitebookify::cli::BookCommand::Epub(args),
+        } => {
+            sitebookify::book::epub(args).context("book epub")?;
+        }
     }
 
     Ok(())

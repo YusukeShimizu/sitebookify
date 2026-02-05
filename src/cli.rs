@@ -164,6 +164,7 @@ pub enum BookCommand {
     Init(BookInitArgs),
     Render(BookRenderArgs),
     Bundle(BookBundleArgs),
+    Epub(BookEpubArgs),
 }
 
 #[derive(Debug, Args)]
@@ -217,6 +218,25 @@ pub struct BookBundleArgs {
     /// Overwrite output file if it already exists.
     #[arg(long, default_value_t = false)]
     pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct BookEpubArgs {
+    /// Input directory for mdBook project (created by `book init` and `book render`).
+    #[arg(long)]
+    pub book: String,
+
+    /// Output file path for EPUB.
+    #[arg(long)]
+    pub out: String,
+
+    /// Overwrite output file if it already exists.
+    #[arg(long, default_value_t = false)]
+    pub force: bool,
+
+    /// Language tag (BCP-47) for EPUB metadata.
+    #[arg(long, default_value = "und")]
+    pub lang: String,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize)]

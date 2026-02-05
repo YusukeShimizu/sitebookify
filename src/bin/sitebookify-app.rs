@@ -178,6 +178,7 @@ async fn try_main() -> anyhow::Result<()> {
         .route("/preview", get(preview_site_handler))
         .route("/artifacts/:job_id", get(download_artifact))
         .route("/jobs/:job_id/book.md", get(download_book_md))
+        .route("/jobs/:job_id/book.epub", get(download_book_epub))
         .route_service("/sitebookify.v1.SitebookifyService/*rest", grpc_service)
         .route_service("/google.longrunning.Operations/*rest", ops_service)
         .layer(TraceLayer::new_for_http())
@@ -341,6 +342,49 @@ async fn download_book_md(
     resp.headers_mut().insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_static("inline; filename=\"book.md\""),
+    );
+    Ok(resp)
+}
+
+async fn download_book_epub(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> Result<Response, axum::http::StatusCode> {
+    if uuid::Uuid::parse_str(job_id.trim()).is_err() {
+        return Err(axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    let Some(job) = state
+        .job_store
+        .get(&job_id)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+    else {
+        return Err(axum::http::StatusCode::NOT_FOUND);
+    };
+
+    if job.status != JobStatus::Done {
+        return Err(axum::http::StatusCode::CONFLICT);
+    }
+
+    let path = job.work_dir.join("book.epub");
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| axum::http::StatusCode::NOT_FOUND)?;
+    let stream = ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
+
+    let mut resp = Response::new(body);
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/epub+zip"),
+    );
+    resp.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!(
+            "attachment; filename=\"sitebookify-{job_id}.epub\""
+        ))
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?,
     );
     Ok(resp)
 }
