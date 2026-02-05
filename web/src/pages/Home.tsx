@@ -207,7 +207,7 @@ export function HomePage({ client, navigate }: Props) {
       </p>
 
       <div className="card">
-        <div className="row">
+        <div className="row formRow">
           <input
             type="url"
             placeholder="https://agentskills.io/"
@@ -223,6 +223,8 @@ export function HomePage({ client, navigate }: Props) {
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
+            inputMode="url"
+            enterKeyHint="go"
           />
           <button onClick={() => void runPreview()} disabled={!canPreview}>
             {previewLoading ? "Preview…" : "Preview"}
