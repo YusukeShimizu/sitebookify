@@ -246,7 +246,7 @@ export function JobPage({ client, jobId, navigate }: Props) {
 
           {job?.state === Job_State.DONE ? (
             <div className="output">
-              <div className="row wrap">
+              <div className="row wrap outputActions">
                 <span className="pill success">output</span>
                 <button
                   className="small"
