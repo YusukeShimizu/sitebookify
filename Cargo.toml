@@ -14,6 +14,7 @@ hex = "0.4.3"
 html2md = "0.2.14"
 prost = "0.13.5"
 prost-types = "0.13.5"
+pulldown-cmark = "0.13.0"
 readability-js = "0.1.5"
 reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0.217", features = ["derive"] }

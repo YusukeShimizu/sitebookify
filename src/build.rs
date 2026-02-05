@@ -25,6 +25,7 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     let toc_path = workspace_dir.join("toc.yaml");
     let book_dir = workspace_dir.join("book");
     let bundled_md_path = workspace_dir.join("book.md");
+    let epub_path = workspace_dir.join("book.epub");
 
     tracing::info!(url = %args.url, out = %workspace_dir.display(), "build: crawl");
     crate::crawl::run(CrawlArgs {
@@ -94,6 +95,17 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
         force: false,
     })
     .context("book bundle")?;
+
+    tracing::info!("build: book epub");
+    crate::epub::create_from_mdbook(
+        &book_dir,
+        &epub_path,
+        &crate::epub::CreateEpubOptions {
+            force: false,
+            lang: crate::epub::guess_lang_tag(&args.language),
+        },
+    )
+    .context("book epub")?;
 
     Ok(())
 }

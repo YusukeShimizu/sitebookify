@@ -382,6 +382,17 @@ export function HomePage({ client, navigate }: Props) {
 
                   <span className="muted">{formatTimestamp(j.createdAtMs)}</span>
 
+                  {j.state === "done" ? (
+                    <a
+                      className="pillLink"
+                      href={`/jobs/${j.jobId}/book.epub`}
+                      download={`sitebookify-${j.jobId}.epub`}
+                      title="EPUB: book.epub"
+                    >
+                      EPUB
+                    </a>
+                  ) : null}
+
                   <button className="small" type="button" onClick={() => removeFromHistory(j.jobId)}>
                     Remove
                   </button>

@@ -71,6 +71,7 @@ state
     toc_path: string
     book_dir: string
     bundle_path: string
+    epub_path: string
 actions
     crawl [
         url: string
@@ -150,6 +151,14 @@ actions
         when `book/src/assets` exists, copy it to `assets/` next to `out` (without overwriting existing files)
         rewrite image paths from `../assets/*` to `assets/*`
         do not overwrite existing output files
+    book_epub [ book: string ; out: string ]
+        => [ exit_code: 0 ]
+        read `book/src/SUMMARY.md` and `book/src/**/*.md`
+        write an `.epub` file
+        include `book/src/assets/**` into the EPUB under `OEBPS/assets/**`
+        rewrite chapter links from `chXX.md#...` to `chXX.xhtml#...`
+        rewrite image paths from `../assets/*` to `assets/*`
+        do not overwrite existing output files
     build [
         url: string
         out: string
@@ -166,6 +175,7 @@ actions
         => [ exit_code: 0 ]
         write `<OUT>/raw/**`, `<OUT>/extracted/**`, `<OUT>/manifest.jsonl`, `<OUT>/toc.yaml`, and `<OUT>/book/**`
         write `<OUT>/book.md`
+        write `<OUT>/book.epub`
         write `<OUT>/assets/**`
         do not overwrite existing snapshot files
 operational principle
@@ -185,10 +195,14 @@ operational principle
     then book_bundle [ book: "<TMP>/book" ; out: "<TMP>/book.md" ]
         => [ exit_code: 0 ]
         `<TMP>/book.md` contains `## Sources`
+    then book_epub [ book: "<TMP>/book" ; out: "<TMP>/book.epub" ]
+        => [ exit_code: 0 ]
+        `<TMP>/book.epub` is a valid zip
     after build [ url: "http://127.0.0.1:<PORT>/docs/" ; out: "<TMP>/workspace" ; title: "Test Book" ; max_pages: 20 ; max_depth: 8 ; concurrency: 2 ; delay_ms: 0 ; language: "日本語" ; tone: "丁寧" ; toc_engine: "noop" ; render_engine: "noop" ]
         => [ exit_code: 0 ]
         `<TMP>/workspace/book/src/chapters/ch01.md` contains `## Sources`
         `<TMP>/workspace/book.md` contains `## Sources`
+        `<TMP>/workspace/book.epub` is a valid zip
 ```
 
 ```text

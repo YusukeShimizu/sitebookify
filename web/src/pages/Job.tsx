@@ -256,12 +256,25 @@ export function JobPage({ client, jobId, navigate }: Props) {
                   {copied ? "Copied" : "Copy"}
                 </button>
                 {download?.url ? (
-                  <a className="pillLink" href={download.url}>
-                    Download zip
+                  <a
+                    className="pillLink"
+                    href={download.url}
+                    download={`sitebookify-${cleanJobId}.zip`}
+                    title="ZIP: book.md + assets (+ book.epub if available)"
+                  >
+                    Download ZIP
                   </a>
                 ) : (
                   <span className="muted">{downloadLoading ? "Preparing download…" : ""}</span>
                 )}
+                <a
+                  className="pillLink"
+                  href={`/jobs/${cleanJobId}/book.epub`}
+                  download={`sitebookify-${cleanJobId}.epub`}
+                  title="EPUB: book.epub"
+                >
+                  Download EPUB
+                </a>
 
                 <div className="segmented">
                   <button

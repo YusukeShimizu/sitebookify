@@ -372,6 +372,15 @@ fn create_zip_from_workspace_blocking(workspace_dir: &Path, out_zip: &Path) -> a
         .with_context(|| format!("open book.md: {}", book_md_path.display()))?;
     io::copy(&mut book_md, &mut zip).context("zip write book.md")?;
 
+    let book_epub_path = workspace_dir.join("book.epub");
+    if book_epub_path.exists() {
+        zip.start_file("book.epub", options)
+            .context("zip start_file book.epub")?;
+        let mut book_epub = File::open(&book_epub_path)
+            .with_context(|| format!("open book.epub: {}", book_epub_path.display()))?;
+        io::copy(&mut book_epub, &mut zip).context("zip write book.epub")?;
+    }
+
     let assets_dir = workspace_dir.join("assets");
     if assets_dir.exists() {
         add_dir_recursive(&mut zip, &assets_dir, Path::new("assets"), options)

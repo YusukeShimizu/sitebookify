@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -399,6 +400,61 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
         fs::metadata(&bundled_asset_path)?.len() > 0,
         "expected bundled asset to be non-empty"
     );
+
+    let epub_path = workspace_dir.join("book.epub");
+    assert!(epub_path.exists(), "expected book.epub to exist");
+
+    let epub_file = fs::File::open(&epub_path)?;
+    let mut epub = zip::ZipArchive::new(epub_file)?;
+
+    {
+        let mut mimetype = epub.by_name("mimetype")?;
+        let mut mimetype_contents = String::new();
+        mimetype.read_to_string(&mut mimetype_contents)?;
+        assert_eq!(mimetype_contents, "application/epub+zip");
+    }
+
+    {
+        let mut container = epub.by_name("META-INF/container.xml")?;
+        let mut container_xml = String::new();
+        container.read_to_string(&mut container_xml)?;
+        assert!(container_xml.contains("OEBPS/content.opf"));
+    }
+
+    {
+        let mut asset_in_epub = epub.by_name(&format!("OEBPS/assets/{expected_asset_file}"))?;
+        let mut asset_bytes = Vec::new();
+        asset_in_epub.read_to_end(&mut asset_bytes)?;
+        assert!(
+            !asset_bytes.is_empty(),
+            "expected epub asset to be non-empty"
+        );
+    }
+
+    {
+        let docs_root_xhtml_path = format!("OEBPS/{docs_root_chapter_id}.xhtml");
+        let mut docs_root_xhtml = epub.by_name(&docs_root_xhtml_path)?;
+        let mut docs_root_xhtml_contents = String::new();
+        docs_root_xhtml.read_to_string(&mut docs_root_xhtml_contents)?;
+        assert!(
+            docs_root_xhtml_contents
+                .contains(&format!("{advanced_chapter_id}.xhtml#{advanced_id}")),
+            "expected cross-chapter link to point to xhtml in epub"
+        );
+    }
+
+    {
+        let advanced_xhtml_path = format!("OEBPS/{advanced_chapter_id}.xhtml");
+        let mut advanced_xhtml = epub.by_name(&advanced_xhtml_path)?;
+        let mut advanced_xhtml_contents = String::new();
+        advanced_xhtml.read_to_string(&mut advanced_xhtml_contents)?;
+        assert!(advanced_xhtml_contents.contains(&format!("assets/{expected_asset_file}")));
+        assert!(!advanced_xhtml_contents.contains("../assets/"));
+        assert!(
+            !advanced_xhtml_contents.contains(&expected_image_url),
+            "expected epub to reference local asset instead of remote URL"
+        );
+    }
 
     let bundle2_md_path = workspace_dir.join("book.bundle2.md");
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
