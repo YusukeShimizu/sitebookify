@@ -53,7 +53,7 @@ pub async fn run(args: LlmCrawlArgs) -> anyhow::Result<()> {
         let filename = format!("p_{id}.md");
         let md_path = extracted_dir.join(&filename);
 
-        let title = extract_title(&source.excerpt).unwrap_or_else(|| url_str.clone());
+        let title = extract_title(&source.content).unwrap_or_else(|| url_str.clone());
 
         let front_matter = ExtractedFrontMatter {
             id: id.clone(),
@@ -65,7 +65,7 @@ pub async fn run(args: LlmCrawlArgs) -> anyhow::Result<()> {
         };
 
         let yaml = serde_yaml::to_string(&front_matter).context("serialize front matter")?;
-        let content = format!("---\n{yaml}---\n\n{}", source.excerpt);
+        let content = format!("---\n{yaml}---\n\n{}", source.content);
         std::fs::write(&md_path, &content)
             .with_context(|| format!("write extracted page: {}", md_path.display()))?;
 
