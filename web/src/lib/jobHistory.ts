@@ -7,7 +7,7 @@ export type StoredJobState = "queued" | "running" | "done" | "error" | "unknown"
 export type StoredJob = {
   jobId: string;
   createdAtMs: number;
-  sourceUrl?: string;
+  query?: string;
   state?: StoredJobState;
   progressPercent?: number;
   message?: string;
@@ -38,7 +38,7 @@ function normalizeJob(v: unknown): StoredJob | null {
       : NaN;
   if (!Number.isFinite(createdAtMs) || createdAtMs <= 0) return null;
 
-  const sourceUrl = typeof v.sourceUrl === "string" ? v.sourceUrl.trim() : undefined;
+  const query = typeof v.query === "string" ? v.query.trim() : undefined;
   const message = typeof v.message === "string" ? v.message : undefined;
   const progressPercentRaw = v.progressPercent;
   const progressPercent =
@@ -51,7 +51,7 @@ function normalizeJob(v: unknown): StoredJob | null {
       ? v.state
       : "unknown";
 
-  return { jobId, createdAtMs, sourceUrl, state, progressPercent, message };
+  return { jobId, createdAtMs, query, state, progressPercent, message };
 }
 
 function pruneExpired(jobs: StoredJob[], nowMs: number): StoredJob[] {
