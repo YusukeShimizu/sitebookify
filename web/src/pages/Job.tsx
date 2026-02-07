@@ -93,7 +93,7 @@ export function JobPage({ client, jobId, navigate }: Props) {
     upsertJob({
       jobId: cleanJobId,
       createdAtMs: existing?.createdAtMs ?? Date.now(),
-      sourceUrl: existing?.sourceUrl,
+      query: existing?.query,
       state: existing?.state ?? "unknown",
       progressPercent: existing?.progressPercent,
       message: existing?.message,
@@ -107,12 +107,12 @@ export function JobPage({ client, jobId, navigate }: Props) {
     upsertJob({
       jobId: cleanJobId,
       createdAtMs,
-      sourceUrl: job?.spec?.sourceUrl ?? existing?.sourceUrl,
+      query: job?.spec?.query ?? existing?.query,
       state: storedState(job?.state),
       progressPercent: job?.progressPercent ?? existing?.progressPercent,
       message: job?.message ?? existing?.message,
     });
-  }, [cleanJobId, job?.message, job?.progressPercent, job?.spec?.sourceUrl, job?.state]);
+  }, [cleanJobId, job?.message, job?.progressPercent, job?.spec?.query, job?.state]);
 
   useEffect(() => {
     if (!cleanJobId) return;
@@ -235,8 +235,8 @@ export function JobPage({ client, jobId, navigate }: Props) {
           </div>
 
           <div className="row">
-            <span className="pill">url</span>
-            <span className="muted">{job?.spec?.sourceUrl ?? "—"}</span>
+            <span className="pill">query</span>
+            <span className="muted">{job?.spec?.query ?? "—"}</span>
           </div>
 
           <div className="progress" aria-label="progress">

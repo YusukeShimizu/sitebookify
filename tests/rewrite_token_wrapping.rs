@@ -37,6 +37,7 @@ lwk_wollet = \"0.11.0\"\n\
         title: "Test Page".to_owned(),
         path: "/docs".to_owned(),
         extracted_md: extracted_path.to_string_lossy().to_string(),
+        trust_tier: None,
     };
     fs::write(
         &manifest_path,

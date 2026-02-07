@@ -10,9 +10,6 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Build(BuildArgs),
-    Crawl(CrawlArgs),
-    Extract(ExtractArgs),
-    Manifest(ManifestArgs),
     Toc {
         #[command(subcommand)]
         command: TocCommand,
@@ -24,39 +21,12 @@ pub enum Command {
 }
 
 #[derive(Debug, Args)]
-pub struct CrawlArgs {
-    /// Start URL (must be http/https).
-    #[arg(long)]
-    pub url: String,
-
-    /// Output directory for Raw snapshot.
-    #[arg(long)]
-    pub out: String,
-
-    /// Maximum pages to retrieve.
-    #[arg(long, default_value_t = 200)]
-    pub max_pages: usize,
-
-    /// Maximum link depth to traverse.
-    #[arg(long, default_value_t = 8)]
-    pub max_depth: u32,
-
-    /// Maximum concurrent HTTP requests.
-    #[arg(long, default_value_t = 4)]
-    pub concurrency: usize,
-
-    /// Delay before each request (politeness).
-    #[arg(long, default_value_t = 200)]
-    pub delay_ms: u64,
-}
-
-#[derive(Debug, Args)]
 pub struct BuildArgs {
-    /// Start URL (must be http/https).
+    /// Natural-language prompt describing the book to generate.
     #[arg(long)]
-    pub url: String,
+    pub query: String,
 
-    /// Output directory for workspace (raw/extracted/manifest/toc/book).
+    /// Output directory for workspace (extracted/manifest/toc/book).
     #[arg(long)]
     pub out: String,
 
@@ -64,21 +34,21 @@ pub struct BuildArgs {
     #[arg(long)]
     pub title: Option<String>,
 
-    /// Maximum pages to retrieve.
-    #[arg(long, default_value_t = 200)]
+    /// Maximum characters in composed Markdown from llm-spider.
+    #[arg(long, default_value_t = 50000)]
+    pub max_chars: usize,
+
+    /// Minimum number of sources to gather.
+    #[arg(long, default_value_t = 5)]
+    pub min_sources: usize,
+
+    /// Maximum results from the initial web search.
+    #[arg(long, default_value_t = 10)]
+    pub search_limit: usize,
+
+    /// Maximum pages to crawl.
+    #[arg(long, default_value_t = 20)]
     pub max_pages: usize,
-
-    /// Maximum link depth to traverse.
-    #[arg(long, default_value_t = 8)]
-    pub max_depth: u32,
-
-    /// Maximum concurrent HTTP requests.
-    #[arg(long, default_value_t = 4)]
-    pub concurrency: usize,
-
-    /// Delay before each request (politeness).
-    #[arg(long, default_value_t = 200)]
-    pub delay_ms: u64,
 
     /// Language for TOC creation and book rendering.
     ///
@@ -99,28 +69,6 @@ pub struct BuildArgs {
     /// Book rendering engine (default: openai).
     #[arg(long, value_enum, default_value_t = LlmEngine::Openai)]
     pub render_engine: LlmEngine,
-}
-
-#[derive(Debug, Args)]
-pub struct ExtractArgs {
-    /// Raw snapshot directory (created by `crawl`).
-    #[arg(long)]
-    pub raw: String,
-
-    /// Output directory for Extracted Pages snapshot.
-    #[arg(long)]
-    pub out: String,
-}
-
-#[derive(Debug, Args)]
-pub struct ManifestArgs {
-    /// Extracted Pages directory (created by `extract`).
-    #[arg(long)]
-    pub extracted: String,
-
-    /// Output file path for `manifest.jsonl`.
-    #[arg(long)]
-    pub out: String,
 }
 
 #[derive(Debug, Subcommand)]

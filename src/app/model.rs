@@ -32,13 +32,13 @@ pub struct Job {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartJobRequest {
-    pub url: String,
+    pub query: String,
     pub title: Option<String>,
 
+    pub max_chars: usize,
+    pub min_sources: usize,
+    pub search_limit: usize,
     pub max_pages: usize,
-    pub max_depth: u32,
-    pub concurrency: usize,
-    pub delay_ms: u64,
 
     pub language: String,
     pub tone: String,
@@ -48,17 +48,17 @@ pub struct StartJobRequest {
 }
 
 impl StartJobRequest {
+    pub fn default_max_chars() -> usize {
+        50000
+    }
+    pub fn default_min_sources() -> usize {
+        3
+    }
+    pub fn default_search_limit() -> usize {
+        3
+    }
     pub fn default_max_pages() -> usize {
-        200
-    }
-    pub fn default_max_depth() -> u32 {
-        8
-    }
-    pub fn default_concurrency() -> usize {
-        4
-    }
-    pub fn default_delay_ms() -> u64 {
-        200
+        7
     }
     pub fn default_language() -> String {
         "日本語".to_string()
