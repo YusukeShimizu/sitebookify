@@ -2,9 +2,11 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 
-use crate::cli::{BookBundleArgs, BookInitArgs, BookRenderArgs, BuildArgs, TocCreateArgs};
+use crate::cli::{
+    BookBundleArgs, BookInitArgs, BookRenderArgs, BuildArgs, CrawlArgs, ExtractArgs, ManifestArgs,
+    TocCreateArgs,
+};
 use crate::formats::Toc;
-use crate::llm_crawl::LlmCrawlArgs;
 
 pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     let workspace_dir = PathBuf::from(&args.out);
@@ -17,23 +19,39 @@ pub async fn run(args: BuildArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&workspace_dir)
         .with_context(|| format!("create workspace dir: {}", workspace_dir.display()))?;
 
+    let raw_dir = workspace_dir.join("raw");
+    let extracted_dir = workspace_dir.join("extracted");
     let manifest_path = workspace_dir.join("manifest.jsonl");
     let toc_path = workspace_dir.join("toc.yaml");
     let book_dir = workspace_dir.join("book");
     let bundled_md_path = workspace_dir.join("book.md");
     let epub_path = workspace_dir.join("book.epub");
 
-    tracing::info!(query = %args.query, out = %workspace_dir.display(), "build: llm_crawl");
-    crate::llm_crawl::run(LlmCrawlArgs {
-        query: args.query.clone(),
-        out_dir: workspace_dir.clone(),
-        max_chars: args.max_chars,
-        min_sources: args.min_sources,
-        search_limit: args.search_limit,
+    tracing::info!(url = %args.url, out = %workspace_dir.display(), "build: crawl");
+    crate::crawl::run(CrawlArgs {
+        url: args.url.clone(),
+        out: raw_dir.to_string_lossy().to_string(),
         max_pages: args.max_pages,
+        max_depth: args.max_depth,
+        concurrency: args.concurrency,
+        delay_ms: args.delay_ms,
     })
     .await
-    .context("llm_crawl")?;
+    .context("crawl")?;
+
+    tracing::info!("build: extract");
+    crate::extract::run(ExtractArgs {
+        raw: raw_dir.to_string_lossy().to_string(),
+        out: extracted_dir.to_string_lossy().to_string(),
+    })
+    .context("extract")?;
+
+    tracing::info!("build: manifest");
+    crate::manifest::run(ManifestArgs {
+        extracted: extracted_dir.to_string_lossy().to_string(),
+        out: manifest_path.to_string_lossy().to_string(),
+    })
+    .context("manifest")?;
 
     tracing::info!("build: toc create");
     crate::toc::create(TocCreateArgs {

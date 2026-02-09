@@ -8,23 +8,23 @@ import "google/api/client.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/longrunning/operations.proto";
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "ServiceProto";
 option java_package = "com.sitebookify.v1";
 
-// SitebookifyService provides a resource-oriented API for generating books
-// from natural-language prompts.
+// SitebookifyService provides a resource-oriented API for running crawl jobs.
 //
-// The service uses llm-spider to search the web, crawl relevant pages, and
-// extract content, then assembles the results into a structured book.
+// This API is designed for both gRPC and REST (via `google.api.http`) and
+// supports long-running operations for asynchronous processing.
 service SitebookifyService {
-  // Creates a book-generation job.
+  // Creates a crawl job.
   //
-  // Given a natural-language query (e.g. "Rust async programming"), the
-  // service searches the web, crawls relevant pages, and produces a
-  // downloadable artifact (`.zip` containing `book.md`, `book.epub`, etc.).
+  // A crawl job crawls a website starting at the given URL and produces a
+  // downloadable artifact (for example, a `.zip` containing `book.md` and
+  // `assets/`).
   //
   // This is a long-running operation.
   //
@@ -37,7 +37,7 @@ service SitebookifyService {
   // - The operation response type is `Job`.
   //
   // Errors:
-  // - `INVALID_ARGUMENT` if `job.spec.query` is empty.
+  // - `INVALID_ARGUMENT` if `job.spec.source_url` is invalid.
   rpc CreateJob(CreateJobRequest) returns (google.longrunning.Operation) {
     option (google.api.http) = {
       post: "/v1/jobs"
@@ -241,7 +241,7 @@ message GenerateJobDownloadUrlResponse {
   google.protobuf.Timestamp expire_time = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
-// Job represents an asynchronous book-generation job.
+// Job represents an asynchronous crawl job.
 message Job {
   option (google.api.resource) = {
     type: "sitebookify.googleapis.com/Job"
@@ -319,16 +319,16 @@ message Job {
 
 // JobSpec is the immutable specification for a job.
 message JobSpec {
-  // Natural-language query describing the book to generate.
+  // Starting URL to crawl.
   //
-  // Examples:
-  // - "Rustの非同期プログラミングについて"
-  // - "Introduction to Kubernetes networking"
-  string query = 1 [
+  // Format:
+  // - `https://agentskills.io/`
+  string source_url = 1 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 2048
+    (buf.validate.field).string.max_len = 2048,
+    (buf.validate.field).string.pattern = "^https?://"
   ];
 
   // Optional title override for the generated book.
@@ -341,33 +341,54 @@ message JobSpec {
     (buf.validate.field).string.max_len = 256
   ];
 
-  // Maximum characters in composed Markdown from llm-spider.
+  // Maximum number of pages to crawl.
   //
   // Notes:
   // - When unset (`0`), the server uses its default.
-  int32 max_chars = 3 [
+  int32 max_pages = 3 [
     (google.api.field_behavior) = OPTIONAL,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).int32.gte = 1,
-    (buf.validate.field).int32.lte = 500000
+    (buf.validate.field).int32.lte = 10000
   ];
 
-  // Minimum number of sources to gather.
+  // Maximum depth from the starting URL.
   //
   // Notes:
   // - When unset (`0`), the server uses its default.
-  int32 min_sources = 4 [
+  int32 max_depth = 4 [
     (google.api.field_behavior) = OPTIONAL,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).int32.gte = 1,
-    (buf.validate.field).int32.lte = 100
+    (buf.validate.field).int32.lte = 128
+  ];
+
+  // Maximum concurrent fetches.
+  //
+  // Notes:
+  // - When unset (`0`), the server uses its default.
+  int32 concurrency = 5 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).int32.gte = 1,
+    (buf.validate.field).int32.lte = 256
+  ];
+
+  // Delay between requests.
+  //
+  // Notes:
+  // - When unset, the server uses its default.
+  google.protobuf.Duration request_delay = 6 [
+    (google.api.field_behavior) = OPTIONAL,
+    (buf.validate.field).duration.gte = {seconds: 0},
+    (buf.validate.field).duration.lte = {seconds: 600}
   ];
 
   // Output language for the generated book.
   //
   // Notes:
   // - When unset (empty), the server uses its default.
-  string language_code = 5 [
+  string language_code = 7 [
     (google.api.field_behavior) = OPTIONAL,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.max_len = 64
@@ -377,7 +398,7 @@ message JobSpec {
   //
   // Notes:
   // - When unset (empty), the server uses its default.
-  string tone = 6 [
+  string tone = 8 [
     (google.api.field_behavior) = OPTIONAL,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.max_len = 64
@@ -387,7 +408,7 @@ message JobSpec {
   //
   // Notes:
   // - When unset (`ENGINE_UNSPECIFIED`), the server uses its default.
-  Engine toc_engine = 7 [
+  Engine toc_engine = 9 [
     (google.api.field_behavior) = OPTIONAL,
     (buf.validate.field).enum.defined_only = true
   ];
@@ -396,7 +417,7 @@ message JobSpec {
   //
   // Notes:
   // - When unset (`ENGINE_UNSPECIFIED`), the server uses its default.
-  Engine render_engine = 8 [
+  Engine render_engine = 10 [
     (google.api.field_behavior) = OPTIONAL,
     (buf.validate.field).enum.defined_only = true
   ];

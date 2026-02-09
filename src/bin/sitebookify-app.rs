@@ -4,14 +4,17 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::error_handling::HandleErrorLayer;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::http::header;
+use axum::response::IntoResponse;
+use axum::response::Json;
 use axum::response::{Html, Response};
 use axum::routing::get;
 use clap::Parser;
 use http_body_util::BodyExt as _;
+use serde::Deserialize;
 use tokio_util::io::ReaderStream;
 use tonic::{Request, Response as TonicResponse, Status};
 use tower::ServiceBuilder;
@@ -172,6 +175,7 @@ async fn try_main() -> anyhow::Result<()> {
 
     let mut app = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
+        .route("/preview", get(preview_site_handler))
         .route("/artifacts/:job_id", get(download_artifact))
         .route("/jobs/:job_id/book.md", get(download_book_md))
         .route("/jobs/:job_id/book.epub", get(download_book_epub))
@@ -273,6 +277,33 @@ async fn download_artifact(
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?,
     );
     Ok(resp)
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewQuery {
+    url: String,
+}
+
+async fn preview_site_handler(
+    Query(q): Query<PreviewQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let raw = q.url.trim();
+    if raw.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "url is required".to_string()));
+    }
+
+    let url = url::Url::parse(raw).map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("invalid url query parameter: {err}"),
+        )
+    })?;
+    let url = sitebookify::crawl::resolve_start_url_for_crawl(&url).await;
+
+    let preview = sitebookify::app::preview::preview_site(&url)
+        .await
+        .map_err(|err| (StatusCode::BAD_GATEWAY, format!("preview failed: {err:#}")))?;
+    Ok(Json(preview))
 }
 
 async fn download_book_md(
@@ -387,27 +418,42 @@ impl SitebookifyService for GrpcSitebookifyService {
             job_id.to_string()
         };
 
-        if spec.query.trim().is_empty() {
-            return Err(Status::invalid_argument("job.spec.query is required"));
+        if spec.source_url.trim().is_empty() {
+            return Err(Status::invalid_argument("job.spec.source_url is required"));
         }
+        let url = url::Url::parse(spec.source_url.trim()).map_err(|err| {
+            Status::invalid_argument(format!("invalid job.spec.source_url: {err}"))
+        })?;
+        if url.scheme() != "http" && url.scheme() != "https" {
+            return Err(Status::invalid_argument(
+                "job.spec.source_url must be http/https",
+            ));
+        }
+        let url = sitebookify::crawl::resolve_start_url_for_crawl(&url).await;
 
         let work_dir = default_job_work_dir(&self.state.base_dir, &job_id);
 
+        let delay_ms = match spec.request_delay {
+            None => StartJobRequest::default_delay_ms(),
+            Some(delay) => duration_to_ms(&delay).map_err(Status::invalid_argument)?,
+        };
+
         let start_request = StartJobRequest {
-            query: spec.query.trim().to_string(),
+            url: url.to_string(),
             title: spec.title.trim().to_string().into_option(),
-            max_chars: i32_as_usize_or_default(
-                spec.max_chars,
-                StartJobRequest::default_max_chars(),
+            max_pages: i32_as_usize_or_default(
+                spec.max_pages,
+                StartJobRequest::default_max_pages(),
             )
             .map_err(Status::invalid_argument)?,
-            min_sources: i32_as_usize_or_default(
-                spec.min_sources,
-                StartJobRequest::default_min_sources(),
+            max_depth: i32_as_u32_or_default(spec.max_depth, StartJobRequest::default_max_depth())
+                .map_err(Status::invalid_argument)?,
+            concurrency: i32_as_usize_or_default(
+                spec.concurrency,
+                StartJobRequest::default_concurrency(),
             )
             .map_err(Status::invalid_argument)?,
-            search_limit: StartJobRequest::default_search_limit(),
-            max_pages: StartJobRequest::default_max_pages(),
+            delay_ms,
             language: string_or_default(spec.language_code, StartJobRequest::default_language()),
             tone: string_or_default(spec.tone, StartJobRequest::default_tone()),
             toc_engine: engine_or_default(spec.toc_engine, StartJobRequest::default_engine())
@@ -744,10 +790,12 @@ fn job_to_pb(job: &Job, start_request: &StartJobRequest) -> PbJob {
 
 fn job_spec_to_pb(start_request: &StartJobRequest) -> JobSpec {
     JobSpec {
-        query: start_request.query.clone(),
+        source_url: start_request.url.clone(),
         title: start_request.title.clone().unwrap_or_default(),
-        max_chars: start_request.max_chars as i32,
-        min_sources: start_request.min_sources as i32,
+        max_pages: start_request.max_pages as i32,
+        max_depth: start_request.max_depth as i32,
+        concurrency: start_request.concurrency as i32,
+        request_delay: Some(duration_from_ms(start_request.delay_ms)),
         language_code: start_request.language.clone(),
         tone: start_request.tone.clone(),
         toc_engine: engine_to_pb(start_request.toc_engine) as i32,
@@ -804,6 +852,25 @@ fn timestamp_from_chrono(dt: chrono::DateTime<chrono::Utc>) -> prost_types::Time
     }
 }
 
+fn duration_to_ms(d: &prost_types::Duration) -> Result<u64, String> {
+    if d.seconds < 0 || d.nanos < 0 {
+        return Err("request_delay must be >= 0".to_string());
+    }
+    let seconds = u64::try_from(d.seconds).map_err(|_| "request_delay is too large".to_string())?;
+    let nanos =
+        u64::try_from(d.nanos).map_err(|_| "request_delay nanos is too large".to_string())?;
+    Ok(seconds
+        .saturating_mul(1000)
+        .saturating_add(nanos / 1_000_000))
+}
+
+fn duration_from_ms(ms: u64) -> prost_types::Duration {
+    prost_types::Duration {
+        seconds: (ms / 1000) as i64,
+        nanos: ((ms % 1000) * 1_000_000) as i32,
+    }
+}
+
 async fn list_local_job_ids(base_dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
     let jobs_dir = base_dir.join("jobs");
     let mut dir = match tokio::fs::read_dir(&jobs_dir).await {
@@ -844,6 +911,14 @@ fn i32_as_usize_or_default(value: i32, default: usize) -> Result<usize, String> 
         std::cmp::Ordering::Less => Err("value must be >= 0".to_string()),
         std::cmp::Ordering::Equal => Ok(default),
         std::cmp::Ordering::Greater => Ok(value as usize),
+    }
+}
+
+fn i32_as_u32_or_default(value: i32, default: u32) -> Result<u32, String> {
+    match value.cmp(&0) {
+        std::cmp::Ordering::Less => Err("value must be >= 0".to_string()),
+        std::cmp::Ordering::Equal => Ok(default),
+        std::cmp::Ordering::Greater => Ok(value as u32),
     }
 }
 

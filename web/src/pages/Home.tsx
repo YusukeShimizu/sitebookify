@@ -25,6 +25,15 @@ type UiState = {
   error: string | null;
 };
 
+type Preview = {
+  source: "sitemap" | "sitemap_index" | "links";
+  estimated_pages: number;
+  estimated_chapters: number;
+  chapters: Array<{ title: string; pages: number }>;
+  sample_urls: string[];
+  notes: string[];
+};
+
 function jobIdFromName(name: string): string {
   return name.startsWith("jobs/") ? name.slice("jobs/".length) : name;
 }
@@ -51,15 +60,19 @@ function formatTimestamp(ms: number): string {
 }
 
 export function HomePage({ client, navigate }: Props) {
-  const [query, setQuery] = useState("");
+  const [url, setUrl] = useState("https://agentskills.io/");
   const [languageCode, setLanguageCode] = useState("日本語");
   const [tone, setTone] = useState("丁寧");
   const [tocEngine, setTocEngine] = useState<Engine>(Engine.NOOP);
   const [renderEngine, setRenderEngine] = useState<Engine>(Engine.NOOP);
   const [{ busy, error }, setState] = useState<UiState>({ busy: false, error: null });
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [jobHistory, setJobHistory] = useState<StoredJob[]>(() => loadJobs());
 
-  const canStart = query.trim().length > 0 && !busy;
+  const canStart = url.trim().length > 0 && !busy;
+  const canPreview = url.trim().length > 0 && !busy && !previewLoading;
 
   const engineLabel =
     tocEngine === Engine.OPENAI || renderEngine === Engine.OPENAI ? "openai" : "noop";
@@ -79,8 +92,8 @@ export function HomePage({ client, navigate }: Props) {
           ? "前回のブックが失敗しています"
           : "作成中のブックがあります";
     const subtitle =
-      recentJob.query && recentJob.query.length > 0
-        ? recentJob.query
+      recentJob.sourceUrl && recentJob.sourceUrl.length > 0
+        ? recentJob.sourceUrl
         : `job_id: ${recentJob.jobId}`;
     return { title, subtitle, jobId: recentJob.jobId };
   }, [recentJob]);
@@ -104,7 +117,7 @@ export function HomePage({ client, navigate }: Props) {
       const op = await client.createJob({
         job: {
           spec: {
-            query: query.trim(),
+            sourceUrl: url.trim(),
             languageCode: languageCode.trim(),
             tone: tone.trim(),
             tocEngine,
@@ -130,7 +143,7 @@ export function HomePage({ client, navigate }: Props) {
       const stored = {
         jobId,
         createdAtMs: Date.now(),
-        query: query.trim(),
+        sourceUrl: url.trim(),
         state: "queued" as const,
         progressPercent: 0,
         message: "queued",
@@ -144,6 +157,30 @@ export function HomePage({ client, navigate }: Props) {
       return;
     }
     setState({ busy: false, error: null });
+  }
+
+  async function runPreview() {
+    const target = url.trim();
+    if (target.length === 0) return;
+
+    setPreviewError(null);
+    setPreviewLoading(true);
+    try {
+      const resp = await fetch(`/preview?url=${encodeURIComponent(target)}`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      if (!resp.ok) {
+        throw new Error(`preview failed (${resp.status}): ${await resp.text()}`);
+      }
+      const data: Preview = await resp.json();
+      setPreview(data);
+    } catch (e) {
+      setPreview(null);
+      setPreviewError(String(e));
+    } finally {
+      setPreviewLoading(false);
+    }
   }
 
   return (
@@ -161,34 +198,80 @@ export function HomePage({ client, navigate }: Props) {
       ) : null}
 
       <h1 className="title">
-        Describe a topic,
+        Turn docs into a
         <br />
-        get a textbook
+        textbook Markdown
       </h1>
       <p className="subtitle">
-        テーマを入力するだけで、Webから情報を収集し本を自動生成します。
+        URL を貼り付けるだけ。まずは無料で構成プレビューを確認し、そのまま生成ジョブを開始できます。
       </p>
 
       <div className="card">
         <div className="row formRow">
-          <textarea
-            placeholder="例: Rustの非同期プログラミングについて"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+          <input
+            type="url"
+            placeholder="https://agentskills.io/"
+            value={url}
+            onChange={(e) => {
+              setUrl(e.target.value);
+              setPreview(null);
+              setPreviewError(null);
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && canStart) {
-                e.preventDefault();
-                void start();
-              }
+              if (e.key === "Enter" && canStart) void start();
             }}
             spellCheck={false}
-            rows={3}
-            style={{ resize: "vertical", flex: 1 }}
+            autoCapitalize="off"
+            autoCorrect="off"
+            inputMode="url"
+            enterKeyHint="go"
           />
+          <button onClick={() => void runPreview()} disabled={!canPreview}>
+            {previewLoading ? "Preview…" : "Preview"}
+          </button>
           <button onClick={() => void start()} disabled={!canStart}>
             {busy ? "Starting…" : "Start"}
           </button>
         </div>
+
+        {preview || previewLoading || previewError ? (
+          <div className="status">
+            <div className="row">
+              <span className="pill">preview</span>
+              {previewLoading ? (
+                <span className="muted">Analyzing…</span>
+              ) : preview ? (
+                <span className="muted">
+                  約 {preview.estimated_pages} ページ • {preview.estimated_chapters} 章 •{" "}
+                  {preview.source}
+                </span>
+              ) : (
+                <span className="muted">—</span>
+              )}
+            </div>
+
+            {preview?.notes?.length ? (
+              <div className="muted hint">{preview.notes.join(" • ")}</div>
+            ) : null}
+
+            {preview?.chapters?.length ? (
+              <div className="row wrap">
+                {preview.chapters.slice(0, 10).map((ch) => (
+                  <span key={ch.title} className="pill">
+                    {ch.title} • {ch.pages}p
+                  </span>
+                ))}
+              </div>
+            ) : null}
+
+            {previewError ? (
+              <div className="row">
+                <span className="pill error">preview</span>
+                <span className="error">{previewError}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="settings">
           <div className="row wrap">
@@ -318,7 +401,7 @@ export function HomePage({ client, navigate }: Props) {
                 </div>
 
                 <div className="muted hint">
-                  {[j.query?.trim(), j.message?.trim()]
+                  {[j.sourceUrl?.trim(), j.message?.trim()]
                     .filter((v): v is string => Boolean(v && v.length > 0))
                     .join(" • ") || "—"}
                 </div>
