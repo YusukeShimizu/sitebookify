@@ -490,7 +490,6 @@ mod tests {
             title: id.to_owned(),
             path: "/docs".to_owned(),
             extracted_md: "extracted/pages/example.md".to_owned(),
-            trust_tier: None,
         }
     }
 

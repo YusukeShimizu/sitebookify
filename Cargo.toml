@@ -11,15 +11,17 @@ base64 = "0.22.1"
 clap = { version = "4.5.27", features = ["derive"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde"] }
 hex = "0.4.3"
-llm-spider = { git = "https://github.com/YusukeShimizu/llm-spider.git" }
+html2md = "0.2.14"
 prost = "0.13.5"
 prost-types = "0.13.5"
 pulldown-cmark = "0.13.0"
+readability-js = "0.1.5"
 reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
 serde_yaml = "0.9.34"
 sha2 = "0.10.8"
+spider = { version = "2.39.21", default-features = false, features = ["sync", "regex"] }
 tempfile = "3.15.0"
 tokio = { version = "1.43.0", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.13", features = ["io"] }

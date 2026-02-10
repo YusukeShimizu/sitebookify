@@ -1,15 +1,25 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrawlRecord {
+    pub url: String,
+    pub normalized_url: String,
+    pub depth: u32,
+    pub status: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    pub retrieved_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_html_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedFrontMatter {
     pub id: String,
     pub url: String,
     pub retrieved_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw_html_path: Option<String>,
+    pub raw_html_path: String,
     pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust_tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,8 +29,6 @@ pub struct ManifestRecord {
     pub title: String,
     pub path: String,
     pub extracted_md: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust_tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

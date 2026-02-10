@@ -7,9 +7,11 @@ use chrono::Utc;
 use crate::app::artifact_store::ArtifactStore;
 use crate::app::job_store::JobStore;
 use crate::app::model::{Job, JobStatus, StartJobRequest};
-use crate::cli::{BookBundleArgs, BookInitArgs, BookRenderArgs, TocCreateArgs};
+use crate::cli::{
+    BookBundleArgs, BookInitArgs, BookRenderArgs, CrawlArgs, ExtractArgs, ManifestArgs,
+    TocCreateArgs,
+};
 use crate::formats::Toc;
-use crate::llm_crawl::LlmCrawlArgs;
 
 pub struct JobRunner {
     job_store: Arc<dyn JobStore>,
@@ -102,25 +104,41 @@ impl JobRunner {
         std::fs::create_dir_all(&job.work_dir)
             .with_context(|| format!("create work dir: {}", job.work_dir.display()))?;
 
+        let raw_dir = job.work_dir.join("raw");
+        let extracted_dir = job.work_dir.join("extracted");
         let manifest_path = job.work_dir.join("manifest.jsonl");
         let toc_path = job.work_dir.join("toc.yaml");
         let book_dir = job.work_dir.join("book");
         let bundled_md_path = job.work_dir.join("book.md");
         let epub_path = job.work_dir.join("book.epub");
 
-        self.update_progress(job, 5, "llm_crawl").await?;
-        crate::llm_crawl::run(LlmCrawlArgs {
-            query: request.query.clone(),
-            out_dir: job.work_dir.clone(),
-            max_chars: request.max_chars,
-            min_sources: request.min_sources,
-            search_limit: request.search_limit,
+        self.update_progress(job, 5, "crawl").await?;
+        crate::crawl::run(CrawlArgs {
+            url: request.url.clone(),
+            out: raw_dir.to_string_lossy().to_string(),
             max_pages: request.max_pages,
+            max_depth: request.max_depth,
+            concurrency: request.concurrency,
+            delay_ms: request.delay_ms,
         })
         .await
-        .context("llm_crawl")?;
+        .context("crawl")?;
 
-        self.update_progress(job, 40, "toc").await?;
+        self.update_progress(job, 25, "extract").await?;
+        crate::extract::run(ExtractArgs {
+            raw: raw_dir.to_string_lossy().to_string(),
+            out: extracted_dir.to_string_lossy().to_string(),
+        })
+        .context("extract")?;
+
+        self.update_progress(job, 40, "manifest").await?;
+        crate::manifest::run(ManifestArgs {
+            extracted: extracted_dir.to_string_lossy().to_string(),
+            out: manifest_path.to_string_lossy().to_string(),
+        })
+        .context("manifest")?;
+
+        self.update_progress(job, 55, "toc").await?;
         crate::toc::create(TocCreateArgs {
             manifest: manifest_path.to_string_lossy().to_string(),
             out: toc_path.to_string_lossy().to_string(),
@@ -137,14 +155,14 @@ impl JobRunner {
             .with_context(|| format!("read toc: {}", toc_path.display()))?;
         let toc: Toc = serde_yaml::from_str(&toc_yaml).context("parse toc")?;
 
-        self.update_progress(job, 55, "book init").await?;
+        self.update_progress(job, 65, "book init").await?;
         crate::book::init(BookInitArgs {
             out: book_dir.to_string_lossy().to_string(),
             title: toc.book_title,
         })
         .context("book init")?;
 
-        self.update_progress(job, 65, "book render").await?;
+        self.update_progress(job, 75, "book render").await?;
         let render_args = BookRenderArgs {
             toc: toc_path.to_string_lossy().to_string(),
             manifest: manifest_path.to_string_lossy().to_string(),
