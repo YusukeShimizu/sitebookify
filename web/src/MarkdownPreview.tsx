@@ -8,7 +8,7 @@ function initMermaid() {
   if (mermaidInitialized) return;
   mermaid.initialize({
     startOnLoad: false,
-    theme: "dark",
+    theme: "default",
     securityLevel: "strict",
   });
   mermaidInitialized = true;
