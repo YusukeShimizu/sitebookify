@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -23,6 +25,8 @@ pub struct OpenAiStub {
     pub base_url: String,
     shutdown_tx: Option<mpsc::Sender<()>>,
     handle: Option<thread::JoinHandle<()>>,
+    #[allow(dead_code)]
+    rewrite_calls: Arc<AtomicUsize>,
 }
 
 impl OpenAiStub {
@@ -30,6 +34,8 @@ impl OpenAiStub {
         let server = tiny_http::Server::http("127.0.0.1:0").expect("start openai stub server");
         let addr = server.server_addr();
         let base_url = format!("http://{addr}/v1");
+        let rewrite_calls = Arc::new(AtomicUsize::new(0));
+        let rewrite_calls_in_server = Arc::clone(&rewrite_calls);
 
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
@@ -109,6 +115,7 @@ impl OpenAiStub {
                         }
                     }
                 } else if prompt.contains("BEGIN_MARKDOWN") {
+                    rewrite_calls_in_server.fetch_add(1, Ordering::Relaxed);
                     match rewrite_response(prompt, config.rewrite_behavior) {
                         Ok(text) => text,
                         Err(err) => {
@@ -159,7 +166,13 @@ impl OpenAiStub {
             base_url,
             shutdown_tx: Some(shutdown_tx),
             handle: Some(handle),
+            rewrite_calls,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn rewrite_call_count(&self) -> usize {
+        self.rewrite_calls.load(Ordering::Relaxed)
     }
 }
 

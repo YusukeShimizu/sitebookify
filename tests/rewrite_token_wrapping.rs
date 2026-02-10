@@ -76,7 +76,7 @@ lwk_wollet = \"0.11.0\"\n\
     .success();
 
     let _openai = openai_stub::OpenAiStub::spawn(openai_stub::OpenAiStubConfig {
-        expected_reasoning_effort: None,
+        expected_reasoning_effort: Some("high".to_owned()),
         rewrite_behavior: openai_stub::RewriteBehavior::WrapTokens,
     });
 

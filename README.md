@@ -89,7 +89,7 @@ sitebookify build --url https://agentskills.io/ --out workspace --language 日�
 ```
 
 OpenAI エンジン（Responses API）の API キーやモデルは環境変数で指定できる。  
-デフォルトは `SITEBOOKIFY_OPENAI_MODEL=gpt-5.2`、`SITEBOOKIFY_OPENAI_REASONING_EFFORT=medium`。
+デフォルトは `SITEBOOKIFY_OPENAI_MODEL=gpt-5.2`、`SITEBOOKIFY_OPENAI_REASONING_EFFORT=high`。
 
 ```sh
 echo 'export OPENAI_API_KEY=...' > .envrc.local

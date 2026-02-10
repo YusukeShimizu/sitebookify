@@ -582,11 +582,14 @@ fn render_chapter_md(
             if chapter_source_ids_seen.insert(source_id.clone()) {
                 chapter_source_ids_in_order.push(source_id.clone());
             }
-            md.push_str(&format!("<a id=\"{source_id}\"></a>\n"));
+            md.push_str(&format!(
+                "<span id=\"{source_id}\" style=\"display:none\" aria-hidden=\"true\"></span>\n"
+            ));
         }
         md.push('\n');
 
-        let mut source_material = String::new();
+        let mut source_material_noop = String::new();
+        let mut rewrite_units = Vec::new();
         for source_id in &section.sources {
             let record = ctx
                 .manifest
@@ -611,25 +614,42 @@ fn render_chapter_md(
             )
             .with_context(|| format!("rewrite links/images for {}", record.url))?;
 
-            if !source_material.is_empty() && !source_material.ends_with('\n') {
-                source_material.push('\n');
+            match ctx.engine {
+                LlmEngine::Noop => {
+                    if !source_material_noop.is_empty() && !source_material_noop.ends_with('\n') {
+                        source_material_noop.push('\n');
+                    }
+                    if !source_material_noop.is_empty() {
+                        source_material_noop.push('\n');
+                    }
+                    source_material_noop.push_str(&format!("### {}\n\n", record.title));
+                    source_material_noop.push_str(body.trim());
+                    source_material_noop.push('\n');
+                }
+                LlmEngine::Openai => {
+                    for chunk in split_markdown_by_heading_levels(&body) {
+                        if chunk.markdown.trim().is_empty() {
+                            continue;
+                        }
+                        rewrite_units.push(SectionRewriteUnit {
+                            source_id: record.id.clone(),
+                            source_title: record.title.clone(),
+                            heading: chunk.heading,
+                            markdown: chunk.markdown.trim().to_owned(),
+                        });
+                    }
+                }
             }
-            if !source_material.is_empty() {
-                source_material.push('\n');
-            }
-            source_material.push_str(&format!("### {}\n\n", record.title));
-            source_material.push_str(body.trim());
-            source_material.push('\n');
         }
 
         let section_body = match ctx.engine {
-            LlmEngine::Noop => source_material.trim_end().to_owned(),
-            LlmEngine::Openai => rewrite::rewrite_section_via_openai(
+            LlmEngine::Noop => source_material_noop.trim_end().to_owned(),
+            LlmEngine::Openai => rewrite_section_units_via_openai(
+                chapter,
+                section,
                 ctx.language,
                 ctx.tone,
-                &chapter.title,
-                &section.title,
-                source_material.trim_end(),
+                &rewrite_units,
             )
             .with_context(|| {
                 format!("openai rewrite section: {} / {}", chapter.id, section.title)
@@ -652,6 +672,124 @@ fn render_chapter_md(
     }
 
     Ok(md)
+}
+
+#[derive(Debug, Clone)]
+struct SectionRewriteUnit {
+    source_id: String,
+    source_title: String,
+    heading: Option<MarkdownHeading>,
+    markdown: String,
+}
+
+impl SectionRewriteUnit {
+    fn describe(&self) -> String {
+        match &self.heading {
+            Some(heading) => format!(
+                "{} ({}) h{} {}",
+                self.source_id, self.source_title, heading.level, heading.title
+            ),
+            None => format!("{} ({})", self.source_id, self.source_title),
+        }
+    }
+
+    fn scoped_section_title(&self, section_title: &str) -> String {
+        match &self.heading {
+            Some(heading) => format!(
+                "{section_title} [source: {}, h{}: {}]",
+                self.source_title, heading.level, heading.title
+            ),
+            None => format!("{section_title} [source: {}]", self.source_title),
+        }
+    }
+}
+
+fn rewrite_section_units_via_openai(
+    chapter: &crate::formats::TocChapter,
+    section: &crate::formats::TocSection,
+    language: &str,
+    tone: &str,
+    units: &[SectionRewriteUnit],
+) -> anyhow::Result<String> {
+    if units.is_empty() {
+        return Ok(String::new());
+    }
+
+    let worker_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(units.len());
+    let next_idx = Arc::new(AtomicUsize::new(0));
+
+    let mut rewritten_chunks = vec![None; units.len()];
+    std::thread::scope(|scope| -> anyhow::Result<()> {
+        let mut handles = Vec::new();
+        for _ in 0..worker_count {
+            let next_idx = Arc::clone(&next_idx);
+            let chapter_id = chapter.id.clone();
+            let chapter_title = chapter.title.clone();
+            let section_title = section.title.trim().to_owned();
+
+            handles.push(
+                scope.spawn(move || -> anyhow::Result<Vec<(usize, String)>> {
+                    let mut out = Vec::new();
+                    loop {
+                        let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                        let Some(unit) = units.get(idx) else {
+                            break;
+                        };
+
+                        let scoped_section_title = unit.scoped_section_title(&section_title);
+                        let rewritten = rewrite::rewrite_section_via_openai(
+                            language,
+                            tone,
+                            &chapter_title,
+                            &scoped_section_title,
+                            unit.markdown.as_str(),
+                        )
+                        .with_context(|| {
+                            format!(
+                                "openai rewrite section chunk: {} / {} / {}",
+                                chapter_id,
+                                section_title,
+                                unit.describe()
+                            )
+                        })?;
+
+                        out.push((idx, rewritten));
+                    }
+                    Ok(out)
+                }),
+            );
+        }
+
+        for handle in handles {
+            let pairs = handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("section rewrite thread panicked"))??;
+            for (idx, rewritten) in pairs {
+                if let Some(slot) = rewritten_chunks.get_mut(idx) {
+                    *slot = Some(rewritten);
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    let mut merged = String::new();
+    for chunk in rewritten_chunks {
+        let chunk =
+            chunk.ok_or_else(|| anyhow::anyhow!("missing rewritten chunk while joining output"))?;
+        if chunk.trim().is_empty() {
+            continue;
+        }
+        if !merged.is_empty() {
+            merged.push_str("\n\n");
+        }
+        merged.push_str(chunk.trim_start_matches('\n').trim_end());
+    }
+
+    Ok(merged)
 }
 
 #[derive(Debug, Clone)]
@@ -1309,6 +1447,85 @@ fn strip_leading_h1(body: &str) -> &str {
     }
 
     &body[offset..]
+}
+
+#[derive(Debug, Clone)]
+struct MarkdownHeading {
+    level: usize,
+    title: String,
+}
+
+#[derive(Debug, Clone)]
+struct MarkdownChunk {
+    heading: Option<MarkdownHeading>,
+    markdown: String,
+}
+
+fn split_markdown_by_heading_levels(body: &str) -> Vec<MarkdownChunk> {
+    let mut chunks = Vec::new();
+    let mut current_heading: Option<MarkdownHeading> = None;
+    let mut current_markdown = String::new();
+    let mut in_fence = false;
+    let mut fence_marker = String::new();
+
+    for line in body.split_inclusive('\n') {
+        if !in_fence {
+            if let Some((level, title)) = parse_atx_heading_line(line) {
+                push_markdown_chunk(&mut chunks, &mut current_heading, &mut current_markdown);
+                current_heading = Some(MarkdownHeading { level, title });
+            }
+
+            if let Some(marker) = fence_start_marker(line) {
+                in_fence = true;
+                fence_marker.clear();
+                fence_marker.push_str(marker);
+            }
+        } else if fence_end_marker(line, &fence_marker) {
+            in_fence = false;
+            fence_marker.clear();
+        }
+
+        current_markdown.push_str(line);
+    }
+
+    push_markdown_chunk(&mut chunks, &mut current_heading, &mut current_markdown);
+    chunks
+}
+
+fn push_markdown_chunk(
+    chunks: &mut Vec<MarkdownChunk>,
+    current_heading: &mut Option<MarkdownHeading>,
+    current_markdown: &mut String,
+) {
+    if current_markdown.trim().is_empty() {
+        current_markdown.clear();
+        return;
+    }
+    chunks.push(MarkdownChunk {
+        heading: current_heading.take(),
+        markdown: std::mem::take(current_markdown),
+    });
+}
+
+fn parse_atx_heading_line(line: &str) -> Option<(usize, String)> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('#') {
+        return None;
+    }
+    let level = trimmed.chars().take_while(|c| *c == '#').count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+
+    let raw_title = trimmed[level..].trim_start();
+    if raw_title.is_empty() {
+        return None;
+    }
+    let title = raw_title.trim_end().trim_end_matches('#').trim_end();
+    if title.is_empty() {
+        return None;
+    }
+    Some((level, title.to_owned()))
 }
 
 fn parse_summary_chapter_paths(summary_md: &str) -> Vec<String> {

@@ -345,7 +345,9 @@ fn pipeline_generates_mdbook_with_sources() -> anyhow::Result<()> {
     assert!(!advanced_chapter.contains("TODO"));
     assert!(!advanced_chapter.contains("キーボードショートカット"));
     assert!(!advanced_chapter.contains("章間の移動には"));
-    assert!(advanced_chapter.contains(&format!("<a id=\"{advanced_id}\"></a>")));
+    assert!(advanced_chapter.contains(&format!(
+        "<span id=\"{advanced_id}\" style=\"display:none\" aria-hidden=\"true\"></span>"
+    )));
     assert!(advanced_chapter.contains(&expected_chapter_image_ref));
     assert!(!advanced_chapter.contains(&expected_image_url));
 

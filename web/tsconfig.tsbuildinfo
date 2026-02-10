@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/gen/buf/validate/validate_pb.ts","./src/gen/sitebookify/v1/manifest_pb.ts","./src/gen/sitebookify/v1/service_pb.ts","./src/gen/sitebookify/v1/toc_pb.ts"],"version":"5.9.3"}

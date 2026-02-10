@@ -30,7 +30,7 @@ impl OpenAiConfig {
         let reasoning_effort = std::env::var("SITEBOOKIFY_OPENAI_REASONING_EFFORT")
             .ok()
             .filter(|effort| !effort.trim().is_empty())
-            .or_else(|| Some("medium".to_owned()));
+            .or_else(|| Some("high".to_owned()));
 
         Ok(Self {
             api_key,

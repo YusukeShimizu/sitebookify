@@ -5,11 +5,11 @@ use sitebookify::formats::{ManifestRecord, Toc, TocChapter, TocPart, TocSection}
 mod openai_stub;
 
 #[test]
-fn rewrite_keeps_output_when_openai_drops_tokens() -> anyhow::Result<()> {
+fn rewrite_splits_page_markdown_by_headings() -> anyhow::Result<()> {
     let temp = tempfile::TempDir::new()?;
 
     let page_id =
-        "p_test_missing_tokens_0000000000000000000000000000000000000000000000000000000000000000";
+        "p_test_heading_split_000000000000000000000000000000000000000000000000000000000000";
     let extracted_path = temp.path().join("extracted.md");
     let extracted = format!(
         "---\n\
@@ -20,7 +20,13 @@ raw_html_path: raw/index.html\n\
 title: Test Page\n\
 ---\n\
 \n\
-Here is https://example.com and `code` and [link](https://openai.com/).\n"
+# Test Page\n\
+\n\
+## Install\n\
+Install steps.\n\
+\n\
+## Usage\n\
+Usage examples.\n"
     );
     fs::write(&extracted_path, extracted)?;
 
@@ -69,14 +75,14 @@ Here is https://example.com and `code` and [link](https://openai.com/).\n"
     .assert()
     .success();
 
-    let _openai = openai_stub::OpenAiStub::spawn(openai_stub::OpenAiStubConfig {
+    let openai = openai_stub::OpenAiStub::spawn(openai_stub::OpenAiStubConfig {
         expected_reasoning_effort: Some("high".to_owned()),
-        rewrite_behavior: openai_stub::RewriteBehavior::DropTokens,
+        rewrite_behavior: openai_stub::RewriteBehavior::EchoInput,
     });
 
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("sitebookify");
     cmd.env("OPENAI_API_KEY", "test-key")
-        .env("SITEBOOKIFY_OPENAI_BASE_URL", &_openai.base_url)
+        .env("SITEBOOKIFY_OPENAI_BASE_URL", &openai.base_url)
         .env("SITEBOOKIFY_OPENAI_MODEL", "stub-model")
         .args([
             "book",
@@ -93,10 +99,16 @@ Here is https://example.com and `code` and [link](https://openai.com/).\n"
         .assert()
         .success();
 
+    assert!(
+        openai.rewrite_call_count() > 1,
+        "expected multiple rewrite calls, got {}",
+        openai.rewrite_call_count()
+    );
+
     let ch01_path = book_dir.join("src").join("chapters").join("ch01.md");
     let ch01 = fs::read_to_string(ch01_path)?;
-    assert!(ch01.contains("short summary"));
-    assert!(!ch01.contains("Here is https://example.com and `code`"));
+    assert!(ch01.contains("## Install"));
+    assert!(ch01.contains("## Usage"));
 
     Ok(())
 }
