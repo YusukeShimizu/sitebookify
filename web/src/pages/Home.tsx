@@ -38,19 +38,6 @@ function jobIdFromName(name: string): string {
   return name.startsWith("jobs/") ? name.slice("jobs/".length) : name;
 }
 
-function engineValue(e: string): Engine {
-  const parsed = Number(e);
-  if (!Number.isFinite(parsed)) return Engine.UNSPECIFIED;
-  switch (parsed) {
-    case Engine.NOOP:
-    case Engine.OPENAI:
-    case Engine.UNSPECIFIED:
-      return parsed;
-    default:
-      return Engine.UNSPECIFIED;
-  }
-}
-
 function formatTimestamp(ms: number): string {
   try {
     return new Date(ms).toLocaleString();
@@ -61,10 +48,6 @@ function formatTimestamp(ms: number): string {
 
 export function HomePage({ client, navigate }: Props) {
   const [url, setUrl] = useState("https://agentskills.io/");
-  const [languageCode, setLanguageCode] = useState("日本語");
-  const [tone, setTone] = useState("丁寧");
-  const [tocEngine, setTocEngine] = useState<Engine>(Engine.NOOP);
-  const [renderEngine, setRenderEngine] = useState<Engine>(Engine.NOOP);
   const [{ busy, error }, setState] = useState<UiState>({ busy: false, error: null });
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -73,9 +56,6 @@ export function HomePage({ client, navigate }: Props) {
 
   const canStart = url.trim().length > 0 && !busy;
   const canPreview = url.trim().length > 0 && !busy && !previewLoading;
-
-  const engineLabel =
-    tocEngine === Engine.OPENAI || renderEngine === Engine.OPENAI ? "openai" : "noop";
 
   const recentJob = jobHistory.length > 0 ? jobHistory[0] : null;
 
@@ -87,10 +67,10 @@ export function HomePage({ client, navigate }: Props) {
     if (!recentJob) return null;
     const title =
       recentJob.state === "done"
-        ? "前回のブックが完了しています"
+        ? "Your last book is ready"
         : recentJob.state === "error"
-          ? "前回のブックが失敗しています"
-          : "作成中のブックがあります";
+          ? "Your last book failed"
+          : "A book is being generated";
     const subtitle =
       recentJob.sourceUrl && recentJob.sourceUrl.length > 0
         ? recentJob.sourceUrl
@@ -118,10 +98,10 @@ export function HomePage({ client, navigate }: Props) {
         job: {
           spec: {
             sourceUrl: url.trim(),
-            languageCode: languageCode.trim(),
-            tone: tone.trim(),
-            tocEngine,
-            renderEngine,
+            languageCode: "日本語",
+            tone: "簡潔で敬語",
+            tocEngine: Engine.OPENAI,
+            renderEngine: Engine.OPENAI,
           },
         },
         jobId: "",
@@ -191,153 +171,108 @@ export function HomePage({ client, navigate }: Props) {
           <div className="bannerSubtitle muted">{banner.subtitle}</div>
           <div className="row wrap bannerActions">
             <button className="small" onClick={() => navigate(`/jobs/${banner.jobId}`)}>
-              進捗を見る
+              View Progress
             </button>
           </div>
         </div>
       ) : null}
 
       <h1 className="title">
-        Turn docs into a
+        Web to Book.
         <br />
-        textbook Markdown
+        <span className="titleLight">Instantly.</span>
       </h1>
       <p className="subtitle">
-        URL を貼り付けるだけ。まずは無料で構成プレビューを確認し、そのまま生成ジョブを開始できます。
+        Convert any website documentation or blog into a perfectly formatted e-book.
       </p>
 
-      <div className="card">
-        <div className="row formRow">
-          <input
-            type="url"
-            placeholder="https://agentskills.io/"
-            value={url}
-            onChange={(e) => {
-              setUrl(e.target.value);
-              setPreview(null);
-              setPreviewError(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && canStart) void start();
-            }}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            inputMode="url"
-            enterKeyHint="go"
-          />
-          <button onClick={() => void runPreview()} disabled={!canPreview}>
-            {previewLoading ? "Preview…" : "Preview"}
-          </button>
-          <button onClick={() => void start()} disabled={!canStart}>
-            {busy ? "Starting…" : "Start"}
-          </button>
-        </div>
+      <input
+        className="urlInput"
+        type="url"
+        placeholder="https://example.com/docs"
+        value={url}
+        onChange={(e) => {
+          setUrl(e.target.value);
+          setPreview(null);
+          setPreviewError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && canStart) void start();
+        }}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        inputMode="url"
+        enterKeyHint="go"
+      />
 
-        {preview || previewLoading || previewError ? (
-          <div className="status">
-            <div className="row">
-              <span className="pill">preview</span>
-              {previewLoading ? (
-                <span className="muted">Analyzing…</span>
-              ) : preview ? (
-                <span className="muted">
-                  約 {preview.estimated_pages} ページ • {preview.estimated_chapters} 章 •{" "}
-                  {preview.source}
-                </span>
-              ) : (
-                <span className="muted">—</span>
-              )}
-            </div>
+      <div className="heroButtons">
+        <button className="btnPrimary" onClick={() => void start()} disabled={!canStart}>
+          {busy ? "Generating..." : "Generate Book"}
+        </button>
+        <button className="btnSecondary" onClick={() => void runPreview()} disabled={!canPreview}>
+          {previewLoading ? "Previewing..." : "Preview Structure"}
+        </button>
+      </div>
 
-            {preview?.notes?.length ? (
-              <div className="muted hint">{preview.notes.join(" • ")}</div>
-            ) : null}
+      <div className="tagline">Free to use &middot; No Login Required</div>
 
-            {preview?.chapters?.length ? (
-              <div className="row wrap">
-                {preview.chapters.slice(0, 10).map((ch) => (
-                  <span key={ch.title} className="pill">
-                    {ch.title} • {ch.pages}p
-                  </span>
-                ))}
-              </div>
-            ) : null}
-
-            {previewError ? (
-              <div className="row">
-                <span className="pill error">preview</span>
-                <span className="error">{previewError}</span>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className="settings">
-          <div className="row wrap">
-            <span className="pill">toc</span>
-            <select
-              className="control"
-              value={tocEngine}
-              onChange={(e) => setTocEngine(engineValue(e.target.value))}
-            >
-              <option value={Engine.NOOP}>noop</option>
-              <option value={Engine.OPENAI}>openai</option>
-            </select>
-
-            <span className="pill">render</span>
-            <select
-              className="control"
-              value={renderEngine}
-              onChange={(e) => setRenderEngine(engineValue(e.target.value))}
-            >
-              <option value={Engine.NOOP}>noop</option>
-              <option value={Engine.OPENAI}>openai</option>
-            </select>
-
-            <span className="pill">{engineLabel}</span>
-          </div>
-
-          <div className="row wrap">
-            <span className="pill">language</span>
-            <input
-              className="control"
-              type="text"
-              value={languageCode}
-              onChange={(e) => setLanguageCode(e.target.value)}
-              placeholder="日本語 / English / …"
-            />
-
-            <span className="pill">tone</span>
-            <input
-              className="control"
-              type="text"
-              value={tone}
-              onChange={(e) => setTone(e.target.value)}
-              placeholder="丁寧 / casual / …"
-            />
-          </div>
-
-          {engineLabel === "openai" ? (
-            <div className="muted hint">
-              OpenAI engine requires the API key on the server (see <code>OPENAI_API_KEY</code> /{" "}
-              <code>SITEBOOKIFY_OPENAI_*</code> in README).
-            </div>
-          ) : null}
-        </div>
-
-        {error ? (
+      {error ? (
+        <div className="card" style={{ textAlign: "left" }}>
           <div className="row">
             <span className="pill error">error</span>
             <span className="error">{error}</span>
           </div>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
-      <div className="card">
+      {preview || previewLoading || previewError ? (
+        <div className="card" style={{ textAlign: "left" }}>
+          <div className="row">
+            <span className="pill">preview</span>
+            {previewLoading ? (
+              <span className="muted">
+                <span className="spinner" /> Analyzing...
+              </span>
+            ) : preview ? (
+              <span className="muted">
+                ~{preview.estimated_pages} pages &middot; {preview.estimated_chapters} chapters
+                &middot; {preview.source}
+              </span>
+            ) : (
+              <span className="muted">&mdash;</span>
+            )}
+          </div>
+
+          {preview?.notes?.length ? (
+            <div className="muted hint" style={{ marginTop: 8 }}>
+              {preview.notes.join(" \u2022 ")}
+            </div>
+          ) : null}
+
+          {preview?.chapters?.length ? (
+            <div className="row wrap" style={{ marginTop: 8 }}>
+              {preview.chapters.slice(0, 10).map((ch) => (
+                <span key={ch.title} className="pill">
+                  {ch.title} &middot; {ch.pages}p
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          {previewError ? (
+            <div className="row" style={{ marginTop: 8 }}>
+              <span className="pill error">error</span>
+              <span className="error">{previewError}</span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="card" style={{ textAlign: "left" }}>
         <div className="row wrap">
           <span className="pill">history</span>
-          <span className="muted">ブラウザに保存 • 24h で自動削除</span>
+          <span className="muted">Stored in browser &middot; auto-deleted after 24h</span>
           <button className="small" type="button" onClick={refreshHistory}>
             Refresh
           </button>
@@ -352,7 +287,9 @@ export function HomePage({ client, navigate }: Props) {
         </div>
 
         {jobHistory.length === 0 ? (
-          <div className="muted hint">まだ実行履歴がありません。</div>
+          <div className="muted hint" style={{ marginTop: 8 }}>
+            No jobs yet.
+          </div>
         ) : (
           <div className="status">
             {jobHistory.map((j) => (
@@ -403,17 +340,12 @@ export function HomePage({ client, navigate }: Props) {
                 <div className="muted hint">
                   {[j.sourceUrl?.trim(), j.message?.trim()]
                     .filter((v): v is string => Boolean(v && v.length > 0))
-                    .join(" • ") || "—"}
+                    .join(" \u2022 ") || "\u2014"}
                 </div>
               </div>
             ))}
           </div>
         )}
-      </div>
-
-      <div className="footer">
-        Local MVP: `sitebookify-app` stores jobs under <code>workspace-app/jobs</code>. For Cloud Run,
-        swap JobStore/ArtifactStore/Queue.
       </div>
     </div>
   );

@@ -34,10 +34,8 @@ export default function App() {
             navigate("/");
           }}
         >
-          {">_ sitebookify"}
+          {"📖 sitebookify"}
         </a>
-        <div className="pill pillDesktop">gRPC-Web • local FS • 24h TTL</div>
-        <div className="pill pillMobile">gRPC-Web • 24h TTL</div>
       </div>
 
       {route.kind === "home" ? (

@@ -25,6 +25,8 @@ type UiState = {
   copied: boolean;
 };
 
+type VisualPhase = "loading" | "processing" | "compiling" | "done" | "error";
+
 function jobName(jobId: string): string {
   return `jobs/${jobId}`;
 }
@@ -41,21 +43,6 @@ async function fetchBookMd(jobId: string, signal?: AbortSignal): Promise<string>
   return await resp.text();
 }
 
-function statusText(state?: Job_State): string {
-  switch (state) {
-    case Job_State.QUEUED:
-      return "queued";
-    case Job_State.RUNNING:
-      return "running";
-    case Job_State.DONE:
-      return "done";
-    case Job_State.ERROR:
-      return "error";
-    default:
-      return "—";
-  }
-}
-
 function storedState(state?: Job_State) {
   switch (state) {
     case Job_State.QUEUED:
@@ -69,6 +56,14 @@ function storedState(state?: Job_State) {
     default:
       return "unknown" as const;
   }
+}
+
+function getPhase(job: Job | null): VisualPhase {
+  if (!job) return "loading";
+  if (job.state === Job_State.ERROR) return "error";
+  if (job.state === Job_State.DONE) return "done";
+  if (job.state === Job_State.RUNNING && (job.progressPercent ?? 0) > 0) return "compiling";
+  return "processing";
 }
 
 export function JobPage({ client, jobId, navigate }: Props) {
@@ -213,112 +208,226 @@ export function JobPage({ client, jobId, navigate }: Props) {
   }
 
   const progressPercent = job?.progressPercent ?? 0;
+  const phase = getPhase(job);
+  const sourceUrl = job?.spec?.sourceUrl;
 
   return (
     <div className="hero">
-      <div className="row wrap">
-        <button className="small" type="button" onClick={() => navigate("/")}>
-          ← Back
-        </button>
-        <span className="pill">job</span>
-        <span className="muted">{cleanJobId || "—"}</span>
-      </div>
-
-      <div className="card">
-        <div className="status">
-          <div className="row">
-            <span className="pill">status</span>
-            <span className={job?.state === Job_State.ERROR ? "error" : "muted"}>
-              {statusText(job?.state)}
-            </span>
-            {job ? <span className="muted">• {job.message}</span> : null}
+      {/* Loading phase */}
+      {phase === "loading" ? (
+        <div style={{ padding: "40px 0" }}>
+          <div className="jobIcon">
+            <span className="spinner" />
           </div>
-
-          <div className="row">
-            <span className="pill">url</span>
-            <span className="muted">{job?.spec?.sourceUrl ?? "—"}</span>
-          </div>
-
-          <div className="progress" aria-label="progress">
-            <div style={{ width: `${progressPercent}%` }} />
-          </div>
-          <div className="muted">{job ? `${progressPercent}%` : ""}</div>
-
-          {job?.state === Job_State.DONE ? (
-            <div className="output">
-              <div className="row wrap outputActions">
-                <span className="pill success">output</span>
-                <button
-                  className="small"
-                  onClick={() => void copyBookMd()}
-                  disabled={!bookMd || bookMdLoading}
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
-                {download?.url ? (
-                  <a
-                    className="pillLink"
-                    href={download.url}
-                    download={`sitebookify-${cleanJobId}.zip`}
-                    title="ZIP: book.md + assets (+ book.epub if available)"
-                  >
-                    Download ZIP
-                  </a>
-                ) : (
-                  <span className="muted">{downloadLoading ? "Preparing download…" : ""}</span>
-                )}
-                <a
-                  className="pillLink"
-                  href={`/jobs/${cleanJobId}/book.epub`}
-                  download={`sitebookify-${cleanJobId}.epub`}
-                  title="EPUB: book.epub"
-                >
-                  Download EPUB
-                </a>
-
-                <div className="segmented">
-                  <button
-                    className={`small ${outputView === "preview" ? "active" : ""}`}
-                    type="button"
-                    onClick={() => setOutputView("preview")}
-                  >
-                    Preview
-                  </button>
-                  <button
-                    className={`small ${outputView === "raw" ? "active" : ""}`}
-                    type="button"
-                    onClick={() => setOutputView("raw")}
-                  >
-                    Markdown
-                  </button>
-                </div>
-                {bookMdLoading ? <span className="muted">Loading…</span> : null}
-              </div>
-              {outputView === "preview" ? (
-                bookMd ? (
-                  <MarkdownPreview markdown={bookMd} />
-                ) : (
-                  <div className="markdownFrame muted">Waiting for book.md…</div>
-                )
-              ) : (
-                <textarea
-                  className="outputText"
-                  readOnly
-                  value={bookMd ?? ""}
-                  placeholder="Waiting for book.md…"
-                />
-              )}
-            </div>
-          ) : null}
-
-          {error ? (
-            <div className="row">
-              <span className="pill error">error</span>
-              <span className="error">{error}</span>
-            </div>
-          ) : null}
+          <h2 className="title" style={{ fontSize: 28 }}>
+            Loading...
+          </h2>
+          <p className="muted">{cleanJobId || "\u2014"}</p>
         </div>
-      </div>
+      ) : null}
+
+      {/* Processing phase (queued / early running) */}
+      {phase === "processing" ? (
+        <div style={{ padding: "40px 0" }}>
+          <div className="jobIcon">🌐</div>
+          <h2 className="title" style={{ fontSize: 28 }}>
+            Reading
+          </h2>
+          {sourceUrl ? <p className="muted">{sourceUrl}</p> : null}
+          <ul className="stepList">
+            <li className={job?.state === Job_State.QUEUED ? "active" : "done"}>
+              {job?.state === Job_State.QUEUED ? (
+                <span className="spinner" />
+              ) : (
+                <span>&#10003;</span>
+              )}
+              Queued for processing
+            </li>
+            <li
+              className={
+                job?.state === Job_State.RUNNING ? "active" : job?.state === Job_State.QUEUED ? "" : "done"
+              }
+            >
+              {job?.state === Job_State.RUNNING ? (
+                <span className="spinner" />
+              ) : job?.state === Job_State.QUEUED ? (
+                <span style={{ width: 18 }}>&bull;</span>
+              ) : (
+                <span>&#10003;</span>
+              )}
+              Fetching pages
+            </li>
+            <li>
+              <span style={{ width: 18 }}>&bull;</span>
+              Building table of contents
+            </li>
+            <li>
+              <span style={{ width: 18 }}>&bull;</span>
+              Generating book
+            </li>
+          </ul>
+          {job?.message ? <div className="compileLog">{job.message}</div> : null}
+        </div>
+      ) : null}
+
+      {/* Compiling phase (running with progress > 0) */}
+      {phase === "compiling" ? (
+        <div className="compileCard">
+          <div className="jobIcon">📖</div>
+          <h2 className="title" style={{ fontSize: 28 }}>
+            Compiling... {progressPercent}%
+          </h2>
+          {sourceUrl ? <p className="muted">{sourceUrl}</p> : null}
+          {job?.message ? <div className="compileLog">{job.message}</div> : null}
+          <div className="compileProgress">
+            <div className="progress" aria-label="progress">
+              <div style={{ width: `${progressPercent}%` }} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Done phase */}
+      {phase === "done" ? (
+        <div style={{ padding: "40px 0" }}>
+          <div className="jobIcon jobIconDone">&#10003;</div>
+          <h2 className="title" style={{ fontSize: 32 }}>
+            Ready to Read.
+          </h2>
+          <p className="muted">
+            Your custom e-book has been generated.
+          </p>
+          <p className="muted hint">Valid for 24 hours.</p>
+
+          <div className="downloadGrid">
+            <a
+              className="downloadCard"
+              href={`/jobs/${cleanJobId}/book.epub`}
+              download={`sitebookify-${cleanJobId}.epub`}
+            >
+              <span className="icon">📕</span>
+              <span>EPUB</span>
+              <span className="label">E-book reader</span>
+            </a>
+            {download?.url ? (
+              <a
+                className="downloadCard"
+                href={download.url}
+                download={`sitebookify-${cleanJobId}.zip`}
+              >
+                <span className="icon">📦</span>
+                <span>Markdown ZIP</span>
+                <span className="label">Raw files + assets</span>
+              </a>
+            ) : (
+              <div className="downloadCard" style={{ opacity: 0.5 }}>
+                <span className="icon">📦</span>
+                <span>{downloadLoading ? "Preparing..." : "Markdown ZIP"}</span>
+                <span className="label">Raw files + assets</span>
+              </div>
+            )}
+          </div>
+
+          <div className="card" style={{ textAlign: "left", marginTop: 24 }}>
+            <div className="row wrap outputActions">
+              <button
+                className="small"
+                onClick={() => void copyBookMd()}
+                disabled={!bookMd || bookMdLoading}
+              >
+                {copied ? "Copied!" : "Copy Markdown"}
+              </button>
+
+              <div className="segmented">
+                <button
+                  className={`small ${outputView === "preview" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setOutputView("preview")}
+                >
+                  Preview
+                </button>
+                <button
+                  className={`small ${outputView === "raw" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setOutputView("raw")}
+                >
+                  Markdown
+                </button>
+              </div>
+              {bookMdLoading ? (
+                <span className="muted">
+                  <span className="spinner" /> Loading...
+                </span>
+              ) : null}
+            </div>
+
+            {outputView === "preview" ? (
+              bookMd ? (
+                <div style={{ marginTop: 10 }}>
+                  <MarkdownPreview markdown={bookMd} />
+                </div>
+              ) : (
+                <div className="markdownFrame muted" style={{ marginTop: 10 }}>
+                  Waiting for book.md...
+                </div>
+              )
+            ) : (
+              <textarea
+                className="outputText"
+                readOnly
+                value={bookMd ?? ""}
+                placeholder="Waiting for book.md..."
+                style={{ marginTop: 10 }}
+              />
+            )}
+          </div>
+
+          <a
+            className="convertAnother"
+            href="/"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate("/");
+            }}
+          >
+            Convert Another Site
+          </a>
+        </div>
+      ) : null}
+
+      {/* Error phase */}
+      {phase === "error" ? (
+        <div style={{ padding: "40px 0" }}>
+          <div className="jobIcon" style={{ background: "#fef2f2" }}>
+            &#9888;
+          </div>
+          <h2 className="title" style={{ fontSize: 28, color: "var(--danger)" }}>
+            Something went wrong.
+          </h2>
+          <p className="muted">{job?.message || "An unknown error occurred."}</p>
+          <div className="heroButtons" style={{ marginTop: 20 }}>
+            <button
+              className="btnPrimary"
+              onClick={(e) => {
+                e.preventDefault();
+                navigate("/");
+              }}
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* General error from polling */}
+      {error && phase !== "error" ? (
+        <div className="card" style={{ textAlign: "left", marginTop: 16 }}>
+          <div className="row">
+            <span className="pill error">error</span>
+            <span className="error">{error}</span>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
