@@ -10,6 +10,8 @@ locals {
 
   openai_api_key           = var.openai_api_key == null ? null : trimspace(var.openai_api_key)
   openai_api_key_secret_id = var.openai_api_key_secret_id == null ? null : trimspace(var.openai_api_key_secret_id)
+  execution_mode           = lower(trimspace(var.execution_mode))
+  worker_auth_token        = var.worker_auth_token == null ? null : trimspace(var.worker_auth_token)
 }
 
 resource "google_project_service" "required" {
@@ -123,6 +125,24 @@ resource "google_cloud_run_v2_service" "sitebookify" {
         value = tostring(var.signed_url_ttl_secs)
       }
 
+      env {
+        name  = "SITEBOOKIFY_EXECUTION_MODE"
+        value = local.execution_mode
+      }
+
+      env {
+        name  = "SITEBOOKIFY_WORKER_URL"
+        value = google_cloud_run_v2_service.sitebookify_worker.uri
+      }
+
+      dynamic "env" {
+        for_each = local.worker_auth_token == null || local.worker_auth_token == "" ? [] : [local.worker_auth_token]
+        content {
+          name  = "SITEBOOKIFY_WORKER_AUTH_TOKEN"
+          value = env.value
+        }
+      }
+
       dynamic "env" {
         for_each = local.openai_api_key_secret_id == null || local.openai_api_key_secret_id == "" ? [] : [local.openai_api_key_secret_id]
         content {
@@ -161,6 +181,92 @@ resource "google_cloud_run_v2_service" "sitebookify" {
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   location = google_cloud_run_v2_service.sitebookify.location
   name     = google_cloud_run_v2_service.sitebookify.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+resource "google_cloud_run_v2_service" "sitebookify_worker" {
+  name     = var.worker_service_name
+  location = var.region
+  ingress  = "INGRESS_TRAFFIC_ALL"
+
+  template {
+    service_account = google_service_account.runtime.email
+
+    scaling {
+      max_instance_count = var.max_instances
+    }
+
+    max_instance_request_concurrency = 1
+
+    containers {
+      image = var.container_image
+
+      ports {
+        container_port = 8080
+      }
+
+      env {
+        name  = "SITEBOOKIFY_ARTIFACT_BUCKET"
+        value = google_storage_bucket.artifacts.name
+      }
+
+      env {
+        name  = "SITEBOOKIFY_SIGNED_URL_TTL_SECS"
+        value = tostring(var.signed_url_ttl_secs)
+      }
+
+      env {
+        name  = "SITEBOOKIFY_EXECUTION_MODE"
+        value = "inprocess"
+      }
+
+      dynamic "env" {
+        for_each = local.worker_auth_token == null || local.worker_auth_token == "" ? [] : [local.worker_auth_token]
+        content {
+          name  = "SITEBOOKIFY_INTERNAL_DISPATCH_TOKEN"
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.openai_api_key_secret_id == null || local.openai_api_key_secret_id == "" ? [] : [local.openai_api_key_secret_id]
+        content {
+          name = "SITEBOOKIFY_OPENAI_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      dynamic "env" {
+        for_each = (local.openai_api_key_secret_id != null && local.openai_api_key_secret_id != "") || local.openai_api_key == null || local.openai_api_key == "" ? [] : [local.openai_api_key]
+        content {
+          name  = "SITEBOOKIFY_OPENAI_API_KEY"
+          value = env.value
+        }
+      }
+    }
+  }
+
+  traffic {
+    type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+    percent = 100
+  }
+
+  depends_on = [
+    google_project_service.required,
+    google_artifact_registry_repository_iam_member.cloud_run_service_agent_reader,
+    google_secret_manager_secret_iam_member.runtime_openai_key_accessor,
+  ]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "worker_public_invoker" {
+  location = google_cloud_run_v2_service.sitebookify_worker.location
+  name     = google_cloud_run_v2_service.sitebookify_worker.name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }

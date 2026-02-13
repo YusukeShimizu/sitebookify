@@ -14,6 +14,38 @@ variable "service_name" {
   description = "Cloud Run service name."
 }
 
+variable "worker_service_name" {
+  type        = string
+  default     = "sitebookify-worker"
+  description = "Cloud Run worker service name."
+}
+
+variable "execution_mode" {
+  type        = string
+  default     = "inprocess"
+  description = "Execution mode for API service. Allowed: inprocess, worker."
+
+  validation {
+    condition     = contains(["inprocess", "worker"], lower(trimspace(var.execution_mode)))
+    error_message = "execution_mode must be either \"inprocess\" or \"worker\"."
+  }
+}
+
+variable "worker_auth_token" {
+  type        = string
+  default     = null
+  nullable    = true
+  sensitive   = true
+  description = "Optional shared bearer token for API->worker dispatch. Required when execution_mode is worker."
+
+  validation {
+    condition = lower(trimspace(var.execution_mode)) != "worker" || (
+      var.worker_auth_token != null && trimspace(var.worker_auth_token) != ""
+    )
+    error_message = "worker_auth_token is required when execution_mode is \"worker\"."
+  }
+}
+
 variable "container_image" {
   type        = string
   description = "Container image URL to deploy to Cloud Run."

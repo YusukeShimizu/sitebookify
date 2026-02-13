@@ -40,6 +40,10 @@ impl JobRunner {
             .await
             .context("load job")?
             .ok_or_else(|| anyhow::anyhow!("job not found: {job_id}"))?;
+        if job.status != JobStatus::Queued {
+            tracing::info!(job_id, status = ?job.status, "skip run: job is not queued");
+            return Ok(());
+        }
         let request = self
             .job_store
             .get_request(job_id)

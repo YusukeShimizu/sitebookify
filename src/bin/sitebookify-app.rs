@@ -5,13 +5,14 @@ use std::sync::Arc;
 use axum::Router;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::response::Json;
 use axum::response::{Html, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use clap::Parser;
 use http_body_util::BodyExt as _;
 use serde::Deserialize;
@@ -22,7 +23,10 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use sitebookify::app::artifact_store::{ArtifactStore, GcsArtifactStore, LocalFsArtifactStore};
-use sitebookify::app::job_store::{JobStore, LocalFsJobStore};
+use sitebookify::app::dispatcher::{
+    ExecutionMode, InProcessJobDispatcher, JobDispatcher, WorkerJobDispatcher,
+};
+use sitebookify::app::job_store::{GcsJobStore, JobStore, LocalFsJobStore};
 use sitebookify::app::model::{Job, JobStatus, StartJobRequest};
 use sitebookify::app::queue::InProcessQueue;
 use sitebookify::app::runner::{JobRunner, default_job_work_dir};
@@ -68,8 +72,9 @@ struct AppState {
     job_store: Arc<dyn JobStore>,
     artifact_store: Arc<dyn ArtifactStore>,
     signed_url_ttl_secs: u32,
-    queue: InProcessQueue,
-    runner: Arc<JobRunner>,
+    dispatcher: Arc<dyn JobDispatcher>,
+    inprocess_dispatcher: Arc<InProcessJobDispatcher>,
+    internal_dispatch_token: Option<String>,
 }
 
 #[tokio::main]
@@ -86,17 +91,33 @@ async fn try_main() -> anyhow::Result<()> {
 
     let args = AppArgs::parse();
     tracing::info!(?args, "starting sitebookify-app");
+    let execution_mode = ExecutionMode::from_env()?;
 
-    let job_store: Arc<dyn JobStore> = Arc::new(LocalFsJobStore::new(&args.data_dir));
     let artifact_bucket = std::env::var("SITEBOOKIFY_ARTIFACT_BUCKET")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
+    if matches!(execution_mode, ExecutionMode::Worker) && artifact_bucket.is_none() {
+        anyhow::bail!(
+            "SITEBOOKIFY_ARTIFACT_BUCKET is required when SITEBOOKIFY_EXECUTION_MODE=worker"
+        );
+    }
     let signed_url_ttl_secs = std::env::var("SITEBOOKIFY_SIGNED_URL_TTL_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|v| *v >= 60 && *v <= 604_800)
         .unwrap_or(3600);
+
+    let job_store: Arc<dyn JobStore> = match &artifact_bucket {
+        Some(bucket) => {
+            tracing::info!(bucket = %bucket, "using GCS job store");
+            Arc::new(GcsJobStore::new(bucket.clone()))
+        }
+        None => {
+            tracing::info!("using local filesystem job store");
+            Arc::new(LocalFsJobStore::new(&args.data_dir))
+        }
+    };
 
     let artifact_store: Arc<dyn ArtifactStore> = match &artifact_bucket {
         Some(bucket) => {
@@ -112,13 +133,31 @@ async fn try_main() -> anyhow::Result<()> {
         Arc::clone(&job_store),
         Arc::clone(&artifact_store),
     ));
+    let queue = InProcessQueue::new(args.max_concurrency);
+    let inprocess_dispatcher = Arc::new(InProcessJobDispatcher::new(queue, Arc::clone(&runner)));
+    let dispatcher: Arc<dyn JobDispatcher> = match execution_mode {
+        ExecutionMode::InProcess => {
+            tracing::info!("execution mode is inprocess");
+            inprocess_dispatcher.clone()
+        }
+        ExecutionMode::Worker => {
+            tracing::info!("execution mode is worker");
+            Arc::new(WorkerJobDispatcher::from_env()?)
+        }
+    };
+    let internal_dispatch_token = std::env::var("SITEBOOKIFY_INTERNAL_DISPATCH_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+
     let state = AppState {
         base_dir: args.data_dir,
         job_store,
         artifact_store,
         signed_url_ttl_secs,
-        queue: InProcessQueue::new(args.max_concurrency),
-        runner,
+        dispatcher,
+        inprocess_dispatcher,
+        internal_dispatch_token,
     };
 
     let grpc_impl = GrpcSitebookifyService {
@@ -179,6 +218,7 @@ async fn try_main() -> anyhow::Result<()> {
         .route("/artifacts/:job_id", get(download_artifact))
         .route("/jobs/:job_id/book.md", get(download_book_md))
         .route("/jobs/:job_id/book.epub", get(download_book_epub))
+        .route("/internal/jobs/:job_id/run", post(run_job_internal))
         .route_service("/sitebookify.v1.SitebookifyService/*rest", grpc_service)
         .route_service("/google.longrunning.Operations/*rest", ops_service)
         .layer(TraceLayer::new_for_http())
@@ -389,6 +429,46 @@ async fn download_book_epub(
     Ok(resp)
 }
 
+async fn run_job_internal(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode> {
+    if uuid::Uuid::parse_str(job_id.trim()).is_err() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let Some(expected) = state.internal_dispatch_token.as_deref() else {
+        return Err(StatusCode::FORBIDDEN);
+    };
+
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let expected = format!("Bearer {expected}");
+    if auth != expected {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let exists = state
+        .job_store
+        .get(&job_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_some();
+    if !exists {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    state
+        .inprocess_dispatcher
+        .dispatch(&job_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
 #[derive(Clone)]
 struct GrpcSitebookifyService {
     state: AppState,
@@ -481,11 +561,11 @@ impl SitebookifyService for GrpcSitebookifyService {
             .await
             .map_err(|err| Status::internal(format!("create job: {err:#}")))?;
 
-        let runner = Arc::clone(&self.state.runner);
-        let job_id_for_task = job_id.clone();
-        self.state.queue.spawn(async move {
-            runner.run_job(&job_id_for_task).await;
-        });
+        self.state
+            .dispatcher
+            .dispatch(&job_id)
+            .await
+            .map_err(|err| Status::internal(format!("dispatch job: {err:#}")))?;
 
         let now = chrono::Utc::now();
         let metadata = CreateJobMetadata {
@@ -552,7 +632,10 @@ impl SitebookifyService for GrpcSitebookifyService {
             );
         }
 
-        let mut job_ids = list_local_job_ids(&self.state.base_dir)
+        let mut job_ids = self
+            .state
+            .job_store
+            .list_job_ids()
             .await
             .map_err(|err| Status::internal(format!("list jobs: {err:#}")))?;
         job_ids.sort();
@@ -869,29 +952,6 @@ fn duration_from_ms(ms: u64) -> prost_types::Duration {
         seconds: (ms / 1000) as i64,
         nanos: ((ms % 1000) * 1_000_000) as i32,
     }
-}
-
-async fn list_local_job_ids(base_dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
-    let jobs_dir = base_dir.join("jobs");
-    let mut dir = match tokio::fs::read_dir(&jobs_dir).await {
-        Ok(dir) => dir,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err.into()),
-    };
-
-    let mut ids = Vec::new();
-    while let Some(entry) = dir.next_entry().await? {
-        let ty = entry.file_type().await?;
-        if !ty.is_dir() {
-            continue;
-        }
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if uuid::Uuid::parse_str(name.as_ref()).is_ok() {
-            ids.push(name.to_string());
-        }
-    }
-    Ok(ids)
 }
 
 fn pack_any(type_url: &str, msg: &impl prost::Message) -> prost_types::Any {

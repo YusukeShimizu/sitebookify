@@ -1,4 +1,5 @@
 pub mod artifact_store;
+pub mod dispatcher;
 pub mod job_store;
 pub mod model;
 pub mod preview;

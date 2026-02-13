@@ -7,3 +7,9 @@ container_image = "asia-northeast1-docker.pkg.dev/your-gcp-project-id/sitebookif
 # - Quick test: set `openai_api_key` (NOT recommended; ends up in terraform state)
 # openai_api_key_secret_id = "sitebookify-openai-api-key"
 # openai_api_key           = "sk-..." # do not commit real key
+
+# Execution mode:
+# - "inprocess" (default): API service executes jobs in-process.
+# - "worker": API dispatches jobs to dedicated worker service.
+# execution_mode = "worker"
+# worker_auth_token = "replace-with-long-random-token"
