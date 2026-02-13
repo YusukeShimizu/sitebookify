@@ -95,7 +95,9 @@ impl WorkerJobDispatcher {
 impl JobDispatcher for WorkerJobDispatcher {
     async fn dispatch(&self, job_id: &str) -> anyhow::Result<()> {
         let url = format!("{}/internal/jobs/{job_id}/run", self.base_url);
-        let mut req = self.client.post(url);
+        // Cloud Run/GFE expects Content-Length for POST. Send an explicit
+        // empty body so reqwest sets Content-Length: 0.
+        let mut req = self.client.post(url).body(String::new());
         if let Some(token) = &self.auth_token {
             req = req.bearer_auth(token);
         }
