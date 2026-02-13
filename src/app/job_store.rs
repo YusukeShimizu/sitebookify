@@ -1,10 +1,13 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
 use reqwest::StatusCode;
 use tokio::fs;
+use tokio::sync::RwLock;
 
 use crate::app::model::{Job, StartJobRequest};
 
@@ -123,6 +126,19 @@ impl JobStore for LocalFsJobStore {
 pub struct GcsJobStore {
     bucket: String,
     client: reqwest::Client,
+    access_token_cache: Arc<RwLock<Option<CachedAccessToken>>>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedAccessToken {
+    token: String,
+    expires_at: Instant,
+}
+
+impl CachedAccessToken {
+    fn is_valid(&self, now: Instant) -> bool {
+        self.expires_at > now
+    }
 }
 
 impl GcsJobStore {
@@ -130,6 +146,7 @@ impl GcsJobStore {
         Self {
             bucket: bucket.into(),
             client: reqwest::Client::new(),
+            access_token_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -145,6 +162,23 @@ impl GcsJobStore {
         #[derive(Debug, serde::Deserialize)]
         struct TokenResponse {
             access_token: String,
+            #[serde(default)]
+            expires_in: u64,
+        }
+
+        let now = Instant::now();
+        if let Some(cached) = self.access_token_cache.read().await.as_ref()
+            && cached.is_valid(now)
+        {
+            return Ok(cached.token.clone());
+        }
+
+        let mut cache = self.access_token_cache.write().await;
+        let now = Instant::now();
+        if let Some(cached) = cache.as_ref()
+            && cached.is_valid(now)
+        {
+            return Ok(cached.token.clone());
         }
 
         let url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
@@ -159,6 +193,12 @@ impl GcsJobStore {
             anyhow::bail!("metadata token request failed ({})", resp.status());
         }
         let token: TokenResponse = resp.json().await.context("parse metadata token json")?;
+        let ttl = token.expires_in.max(60);
+        let refresh_in = ttl.saturating_sub(30).max(1);
+        *cache = Some(CachedAccessToken {
+            token: token.access_token.clone(),
+            expires_at: Instant::now() + Duration::from_secs(refresh_in),
+        });
         Ok(token.access_token)
     }
 
