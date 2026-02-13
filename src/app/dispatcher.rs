@@ -95,9 +95,13 @@ impl WorkerJobDispatcher {
 impl JobDispatcher for WorkerJobDispatcher {
     async fn dispatch(&self, job_id: &str) -> anyhow::Result<()> {
         let url = format!("{}/internal/jobs/{job_id}/run", self.base_url);
-        // Cloud Run/GFE expects Content-Length for POST. Send an explicit
-        // empty body so reqwest sets Content-Length: 0.
-        let mut req = self.client.post(url).body(String::new());
+        // Cloud Run/GFE may reject POST without explicit length.
+        // Send a tiny JSON payload to ensure Content-Length is always present.
+        let mut req = self
+            .client
+            .post(url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body("{}");
         if let Some(token) = &self.auth_token {
             req = req.bearer_auth(token);
         }
@@ -107,7 +111,9 @@ impl JobDispatcher for WorkerJobDispatcher {
         }
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("worker dispatch failed ({status}): {body}");
+        let body_preview = body.chars().take(240).collect::<String>();
+        tracing::warn!(%status, body = %body_preview, "worker dispatch failed");
+        anyhow::bail!("worker dispatch failed ({status})");
     }
 }
 
