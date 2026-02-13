@@ -202,6 +202,10 @@ resource "google_cloud_run_v2_service" "sitebookify_worker" {
     containers {
       image = var.container_image
 
+      resources {
+        cpu_idle = false
+      }
+
       ports {
         container_port = 8080
       }
