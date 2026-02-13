@@ -21,6 +21,8 @@ env:
   GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
   GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
   CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE || 'sitebookify' }}
+  CLOUD_RUN_WORKER_SERVICE: ${{ vars.CLOUD_RUN_WORKER_SERVICE || 'sitebookify-worker' }}
+  CLOUD_RUN_DEPLOY_WORKER: ${{ vars.CLOUD_RUN_DEPLOY_WORKER || 'true' }}
 
   IMAGE_NAME: sitebookify-app
   GAR_HOST: ${{ vars.GCP_REGION }}-docker.pkg.dev
@@ -85,14 +87,14 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
-      - name: Deploy to Cloud Run
+      - name: Deploy API service to Cloud Run
         if: steps.can_deploy.outputs.ok == 'true'
-        id: deploy
+        id: deploy_api
         shell: bash
         run: |
           set -euo pipefail
           image="${GAR_HOST}/${GCP_PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:sha-${DEPLOY_SHA}"
-          echo "Deploying ${image} to Cloud Run service '${CLOUD_RUN_SERVICE}' (${GCP_REGION})..."
+          echo "Deploying ${image} to API service '${CLOUD_RUN_SERVICE}' (${GCP_REGION})..."
 
           gcloud run deploy "${CLOUD_RUN_SERVICE}" \
             --image "${image}" \
@@ -106,13 +108,38 @@ jobs:
             --format='value(status.url)')"
 
           echo "url=${url}" >> "${GITHUB_OUTPUT}"
-          echo "Deployed URL: ${url}"
+          echo "Deployed API URL: ${url}"
+
+      - name: Deploy worker service to Cloud Run
+        if: |
+          steps.can_deploy.outputs.ok == 'true' &&
+          env.CLOUD_RUN_DEPLOY_WORKER == 'true'
+        id: deploy_worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${GAR_HOST}/${GCP_PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:sha-${DEPLOY_SHA}"
+          echo "Deploying ${image} to worker service '${CLOUD_RUN_WORKER_SERVICE}' (${GCP_REGION})..."
+
+          gcloud run deploy "${CLOUD_RUN_WORKER_SERVICE}" \
+            --image "${image}" \
+            --region "${GCP_REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --quiet
+
+          url="$(gcloud run services describe "${CLOUD_RUN_WORKER_SERVICE}" \
+            --region "${GCP_REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --format='value(status.url)')"
+
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+          echo "Deployed worker URL: ${url}"
 
       - name: Smoke test
         if: |
-          steps.deploy.outputs.url != '' &&
+          steps.deploy_api.outputs.url != '' &&
           env.CLOUD_RUN_SMOKE_TEST == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS "${{ steps.deploy.outputs.url }}${CLOUD_RUN_SMOKE_TEST_PATH}"
+          curl -fsS "${{ steps.deploy_api.outputs.url }}${CLOUD_RUN_SMOKE_TEST_PATH}"
