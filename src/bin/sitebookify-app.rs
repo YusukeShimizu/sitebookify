@@ -1,3 +1,4 @@
+use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -368,11 +369,22 @@ async fn download_book_md(
     }
 
     let path = job.work_dir.join("book.md");
-    let file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|_| axum::http::StatusCode::NOT_FOUND)?;
-    let stream = ReaderStream::new(file);
-    let body = axum::body::Body::from_stream(stream);
+    let body = match tokio::fs::File::open(&path).await {
+        Ok(file) => {
+            let stream = ReaderStream::new(file);
+            axum::body::Body::from_stream(stream)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(
+                job_id = %job_id,
+                path = %path.display(),
+                "book.md was not found in work dir, fallback to artifact zip"
+            );
+            let bytes = read_book_output_from_artifact(&state, &job, "book.md").await?;
+            axum::body::Body::from(bytes)
+        }
+        Err(_) => return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+    };
 
     let mut resp = Response::new(body);
     resp.headers_mut().insert(
@@ -408,11 +420,22 @@ async fn download_book_epub(
     }
 
     let path = job.work_dir.join("book.epub");
-    let file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|_| axum::http::StatusCode::NOT_FOUND)?;
-    let stream = ReaderStream::new(file);
-    let body = axum::body::Body::from_stream(stream);
+    let body = match tokio::fs::File::open(&path).await {
+        Ok(file) => {
+            let stream = ReaderStream::new(file);
+            axum::body::Body::from_stream(stream)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(
+                job_id = %job_id,
+                path = %path.display(),
+                "book.epub was not found in work dir, fallback to artifact zip"
+            );
+            let bytes = read_book_output_from_artifact(&state, &job, "book.epub").await?;
+            axum::body::Body::from(bytes)
+        }
+        Err(_) => return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+    };
 
     let mut resp = Response::new(body);
     resp.headers_mut().insert(
@@ -427,6 +450,83 @@ async fn download_book_epub(
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?,
     );
     Ok(resp)
+}
+
+async fn read_book_output_from_artifact(
+    state: &AppState,
+    job: &Job,
+    entry_name: &'static str,
+) -> Result<Vec<u8>, StatusCode> {
+    let zip_bytes = read_artifact_zip_bytes(state, job).await?;
+    let job_id = job.job_id.clone();
+    tokio::task::spawn_blocking(move || extract_zip_entry(&zip_bytes, entry_name))
+        .await
+        .map_err(|err| {
+            tracing::warn!(job_id = %job_id, ?err, "failed to join artifact zip extraction task");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+}
+
+async fn read_artifact_zip_bytes(state: &AppState, job: &Job) -> Result<Vec<u8>, StatusCode> {
+    if job
+        .artifact_uri
+        .as_deref()
+        .is_some_and(|uri| uri.starts_with("gs://"))
+    {
+        let signed_url = state
+            .artifact_store
+            .generate_download_url(&job.job_id, state.signed_url_ttl_secs)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let resp = reqwest::get(&signed_url).await.map_err(|_| {
+            tracing::warn!(
+                job_id = %job.job_id,
+                url = %signed_url,
+                "failed to fetch artifact zip from signed URL"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        if !resp.status().is_success() {
+            tracing::warn!(
+                job_id = %job.job_id,
+                status = %resp.status(),
+                "artifact zip download failed"
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        return Ok(bytes.to_vec());
+    }
+
+    let Some(path) = job.artifact_path.as_ref() else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    match tokio::fs::read(path).await {
+        Ok(bytes) => Ok(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+fn extract_zip_entry(zip_bytes: &[u8], entry_name: &str) -> Result<Vec<u8>, StatusCode> {
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut entry = archive.by_name(entry_name).map_err(|err| match err {
+        zip::result::ZipError::FileNotFound => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    })?;
+    let mut out = Vec::new();
+    entry
+        .read_to_end(&mut out)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(out)
 }
 
 async fn run_job_internal(
@@ -993,5 +1093,40 @@ impl IntoOptionString for String {
         } else {
             Some(self)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+
+        for (name, body) in entries {
+            zip.start_file(name, options).expect("start file");
+            zip.write_all(body).expect("write file");
+        }
+
+        zip.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn extract_zip_entry_reads_target_file() {
+        let zip = make_zip(&[("book.md", b"# title\n"), ("book.epub", b"EPUB")]);
+        let body = extract_zip_entry(&zip, "book.md").expect("book.md entry should exist");
+        assert_eq!(body, b"# title\n");
+    }
+
+    #[test]
+    fn extract_zip_entry_returns_not_found_for_missing_file() {
+        let zip = make_zip(&[("book.md", b"# title\n")]);
+        let err = extract_zip_entry(&zip, "book.epub").expect_err("book.epub should not exist");
+        assert_eq!(err, StatusCode::NOT_FOUND);
     }
 }
