@@ -259,23 +259,6 @@ button.small {
   border-radius: 999px;
 }
 
-.segmented {
-  margin-left: auto;
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.segmented > button {
-  background: var(--bg-secondary);
-}
-
-.segmented > button.active {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #ffffff;
-}
-
 .pill {
   display: inline-flex;
   align-items: center;
@@ -376,129 +359,6 @@ button.small {
   font-size: 13px;
   line-height: 1.55;
   white-space: pre;
-}
-
-.markdownFrame {
-  width: 100%;
-  min-height: 360px;
-  max-height: 70vh;
-  overflow: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 18px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.75;
-  text-align: left;
-}
-
-.markdownFrame > :first-child {
-  margin-top: 0;
-}
-
-.markdownFrame h1 {
-  font-size: 28px;
-  line-height: 1.2;
-  margin: 22px 0 10px;
-}
-
-.markdownFrame h2 {
-  font-size: 22px;
-  line-height: 1.25;
-  margin: 22px 0 10px;
-}
-
-.markdownFrame h3 {
-  font-size: 18px;
-  line-height: 1.3;
-  margin: 18px 0 8px;
-}
-
-.markdownFrame p {
-  margin: 10px 0;
-}
-
-.markdownFrame a {
-  color: #2563eb;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.markdownFrame ul,
-.markdownFrame ol {
-  margin: 10px 0;
-  padding-left: 22px;
-}
-
-.markdownFrame blockquote {
-  margin: 14px 0;
-  padding: 10px 12px;
-  border-left: 4px solid var(--border);
-  background: var(--bg-secondary);
-  border-radius: 10px;
-}
-
-.markdownFrame hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 18px 0;
-}
-
-.markdownFrame pre {
-  margin: 12px 0;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  overflow: auto;
-}
-
-.markdownFrame code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
-  font-size: 13px;
-}
-
-.markdownFrame :not(pre) > code {
-  padding: 1px 6px;
-  border-radius: 9px;
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-}
-
-.markdownFrame img {
-  max-width: 100%;
-  border-radius: 10px;
-}
-
-.markdownFrame table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 14px 0;
-  overflow: auto;
-}
-
-.markdownFrame th,
-.markdownFrame td {
-  border: 1px solid var(--border);
-  padding: 8px 10px;
-  vertical-align: top;
-}
-
-.markdownFrame th {
-  background: var(--bg-secondary);
-}
-
-.markdownFrame .mermaid {
-  width: 100%;
-  overflow: auto;
-}
-
-.markdownFrame .mermaid svg {
-  max-width: 100%;
-  height: auto;
 }
 
 /* Job page: icon cards */
@@ -697,17 +557,6 @@ button.small {
     justify-content: center;
   }
 
-  .outputActions .segmented {
-    width: 100%;
-    margin-left: 0;
-    justify-content: flex-start;
-  }
-
-  .outputActions .segmented > button {
-    flex: 1 1 0;
-  }
-
-  .markdownFrame,
   .outputText {
     min-height: 52vh;
     max-height: 70svh;

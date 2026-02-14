@@ -1,6 +1,5 @@
 import type { Client } from "@connectrpc/connect";
 import { useEffect, useMemo, useState } from "react";
-import { MarkdownPreview } from "../MarkdownPreview";
 import {
   Job_State,
   SitebookifyService,
@@ -70,7 +69,6 @@ export function JobPage({ client, jobId, navigate }: Props) {
   const cleanJobId = jobId.trim();
   const jobResourceName = useMemo(() => jobName(cleanJobId), [cleanJobId]);
 
-  const [outputView, setOutputView] = useState<"preview" | "raw">("preview");
   const [{ job, bookMd, bookMdLoading, download, downloadLoading, copied, error }, setState] =
     useState<UiState>({
       job: null,
@@ -337,23 +335,14 @@ export function JobPage({ client, jobId, navigate }: Props) {
               >
                 {copied ? "Copied!" : "Copy Markdown"}
               </button>
-
-              <div className="segmented">
-                <button
-                  className={`small ${outputView === "preview" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setOutputView("preview")}
-                >
-                  Preview
-                </button>
-                <button
-                  className={`small ${outputView === "raw" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setOutputView("raw")}
-                >
-                  Markdown
-                </button>
-              </div>
+              <a
+                className="pillLink"
+                href={`/jobs/${cleanJobId}/book.md`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open book.md
+              </a>
               {bookMdLoading ? (
                 <span className="muted">
                   <span className="spinner" /> Loading...
@@ -361,25 +350,13 @@ export function JobPage({ client, jobId, navigate }: Props) {
               ) : null}
             </div>
 
-            {outputView === "preview" ? (
-              bookMd ? (
-                <div style={{ marginTop: 10 }}>
-                  <MarkdownPreview markdown={bookMd} />
-                </div>
-              ) : (
-                <div className="markdownFrame muted" style={{ marginTop: 10 }}>
-                  Waiting for book.md...
-                </div>
-              )
-            ) : (
-              <textarea
-                className="outputText"
-                readOnly
-                value={bookMd ?? ""}
-                placeholder="Waiting for book.md..."
-                style={{ marginTop: 10 }}
-              />
-            )}
+            <textarea
+              className="outputText"
+              readOnly
+              value={bookMd ?? ""}
+              placeholder="Waiting for book.md..."
+              style={{ marginTop: 10 }}
+            />
           </div>
 
           <a
