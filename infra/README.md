@@ -28,10 +28,11 @@
     - 権限不足（`serviceusage.services.use`）で失敗する場合は、そのプロジェクトに対する権限付与が必要
 - もしくは CI 用の Service Account を作って `GOOGLE_APPLICATION_CREDENTIALS` で渡す
 
-3) **コンテナイメージ（Artifact Registry へ push できる状態）**
-- Cloud Run のデプロイには `container_image` が必要。
+3) **コンテナイメージ（CI経由で deploy 済み）**
+- Cloud Run の image は Terraform 変数 `deploy_sha` から組み立てる。
+- `deploy_sha` は `deploy-cloudrun` workflow の最新成功 run（`main`）から取得する。
 - `infra/terraform/cloudrun-public-gcs/` は Artifact Registry リポジトリまで作る。
-  - **イメージの push は別途**（ローカルまたは GitHub Actions）。
+  - build/push/deploy は GitHub Actions 運用を前提にする（手元で `container_image` を固定しない）。
 
 ## Terraform が作るもの（`cloudrun-public-gcs`）
 
@@ -61,23 +62,16 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-`container_image` は次の形式で指定する。
-
-```text
-<REGION>-docker.pkg.dev/<PROJECT_ID>/<REPO>/sitebookify-app:<TAG>
-```
-
-Terraform で Cloud Run を管理する場合、固定 tag（例: `latest`）のまま push すると差分検知できないことがある。
-Revision は digest 固定のため、`terraform apply` でも更新されないことがある。
-そのため **tag を毎回変える（推奨）** か、digest（`@sha256:...`）指定にする。
+`terraform.tfvars` には `project_id` / `region` など固定設定のみを置く。  
+**`deploy_sha` / image tag は手で書かない**（CI出力から注入する）。
 
 OpenAI エンジンを使う場合は `openai_api_key_secret_id`（推奨）または `openai_api_key` を設定する。
 詳細は `infra/terraform/cloudrun-public-gcs/README.md` を参照。
 
-### 1) コンテナを build & push（例: ローカル）
+### 1) 初回のみ Artifact Registry を作成
 
 > Artifact Registry リポジトリ（`GAR_REPOSITORY` / `artifact_registry_repository_id`）は Terraform が作る。
-> 初回は先にリポジトリだけ作ってから push するのが安全。
+> 初回は先にリポジトリだけ作る。
 >
 > ```sh
 > cd infra/terraform/cloudrun-public-gcs
@@ -85,34 +79,18 @@ OpenAI エンジンを使う場合は `openai_api_key_secret_id`（推奨）ま�
 > terraform apply -target=google_artifact_registry_repository.sitebookify
 > ```
 
-```sh
-cd "$(git rev-parse --show-toplevel)" # repo root (Dockerfile is here)
-
-PROJECT_ID="<your-project-id>"
-REGION="<your-region>" # 例: asia-northeast1
-AR_REPO="sitebookify"
-TAG="git-$(git rev-parse --short HEAD)" # 例: git-a1b2c3d（固定 tag を避ける）
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/sitebookify-app:${TAG}"
-
-gcloud config set project "${PROJECT_ID}"
-gcloud auth configure-docker "${REGION}-docker.pkg.dev"
-
-# Apple Silicon などで build が失敗する場合は linux/amd64 を指定する（Dockerfile が x86_64 の buf を使うため）
-docker buildx build --platform linux/amd64 -t "${IMAGE}" --push .
-# もしくは（x86_64 環境など）:
-# docker build -t "${IMAGE}" .
-# docker push "${IMAGE}"
-```
-
 ### 2) Terraform apply
 
-`terraform.tfvars` の `container_image` も、今 push した `${IMAGE}` に更新してから apply する。
+`deploy-cloudrun` workflow の最新成功 SHA を自動取得し、apply前に Cloud Run の現在 image と差分チェックしてから Terraform を実行する。
 
 ```sh
 cd infra/terraform/cloudrun-public-gcs
-terraform init
-terraform apply
+gh auth status
+./scripts/tf-with-ci-sha.sh plan
+./scripts/tf-with-ci-sha.sh apply
 ```
+
+rollback が意図的な場合のみ `--allow-rollback` を使う。
 
 ### 3) 動作確認（smoke）
 

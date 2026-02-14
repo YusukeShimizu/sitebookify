@@ -46,9 +46,20 @@ variable "worker_auth_token" {
   }
 }
 
-variable "container_image" {
+variable "deploy_sha" {
   type        = string
-  description = "Container image URL to deploy to Cloud Run."
+  description = "Git commit SHA for CI-managed image tag (`sha-<full-sha>`)."
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", lower(trimspace(var.deploy_sha))))
+    error_message = "deploy_sha must be a full 40-character git commit SHA."
+  }
+}
+
+variable "container_image_name" {
+  type        = string
+  default     = "sitebookify-app"
+  description = "Container image name inside Artifact Registry."
 }
 
 variable "openai_api_key" {

@@ -302,3 +302,24 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member "serviceAccount:${SA_EMAIL}" \
   --role "roles/iam.serviceAccountUser"
 ```
+
+## Terraform apply: CIのdeploy SHAを単一ソースとして使う
+
+`infra/terraform/cloudrun-public-gcs` は Cloud Run image を `deploy_sha` から組み立てる。
+`container_image` を `terraform.tfvars` で手更新しない。
+
+`scripts/tf-with-ci-sha.sh` は次を自動実行する。
+
+- `deploy-cloudrun` workflow（`main`）の最新成功 run から `head_sha` を取得
+- apply 前に Cloud Run 現在 image（API/worker）との差分をチェック
+- rollback 疑い（現在より古い SHA）を検知したら停止
+- `terraform plan/apply -var deploy_sha=<sha>` を実行
+
+```sh
+cd infra/terraform/cloudrun-public-gcs
+gh auth status
+./scripts/tf-with-ci-sha.sh plan
+./scripts/tf-with-ci-sha.sh apply
+```
+
+意図的に rollback する場合のみ `--allow-rollback` を指定する。

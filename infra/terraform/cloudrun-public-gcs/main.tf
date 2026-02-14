@@ -12,6 +12,8 @@ locals {
   openai_api_key_secret_id = var.openai_api_key_secret_id == null ? null : trimspace(var.openai_api_key_secret_id)
   execution_mode           = lower(trimspace(var.execution_mode))
   worker_auth_token        = var.worker_auth_token == null ? null : trimspace(var.worker_auth_token)
+  deploy_sha               = lower(trimspace(var.deploy_sha))
+  container_image          = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_registry_repository_id}/${var.container_image_name}:sha-${local.deploy_sha}"
 }
 
 resource "google_project_service" "required" {
@@ -109,7 +111,7 @@ resource "google_cloud_run_v2_service" "sitebookify" {
     max_instance_request_concurrency = var.concurrency
 
     containers {
-      image = var.container_image
+      image = local.container_image
 
       ports {
         container_port = 8080
@@ -200,7 +202,7 @@ resource "google_cloud_run_v2_service" "sitebookify_worker" {
     max_instance_request_concurrency = 1
 
     containers {
-      image = var.container_image
+      image = local.container_image
 
       resources {
         cpu_idle = false

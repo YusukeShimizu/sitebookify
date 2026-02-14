@@ -1,7 +1,8 @@
 project_id      = "your-gcp-project-id"
 region          = "asia-northeast1"
-# Tip: avoid fixed tags like `latest` when deploying via Terraform.
-container_image = "asia-northeast1-docker.pkg.dev/your-gcp-project-id/sitebookify/sitebookify-app:git-<short-sha>"
+# deploy_sha is provided by CI output via scripts/tf-with-ci-sha.sh.
+# Keep this file free from image tag updates.
+# deploy_sha = "0123456789abcdef0123456789abcdef01234567"
 # OpenAI (choose one):
 # - Recommended: use Secret Manager and set `openai_api_key_secret_id`
 # - Quick test: set `openai_api_key` (NOT recommended; ends up in terraform state)
