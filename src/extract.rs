@@ -374,6 +374,29 @@ struct ExtractedContent {
     body_md: String,
 }
 
+pub fn preview_character_count_from_html(
+    readability: &Readability,
+    html: &str,
+    url: &str,
+) -> Result<usize, ReadabilityError> {
+    let extracted = extract_with_readability(readability, html, url)?;
+    let mut title = extracted.title;
+    if title.trim().is_empty() {
+        title = url.to_string();
+    }
+
+    let mut body_md = extracted.body_md.trim().to_owned();
+    if !body_md.trim_start().starts_with('#') {
+        body_md = format!("# {title}\n\n{body_md}");
+    }
+    body_md = strip_known_boilerplate_sections(&body_md);
+    body_md = body_md.trim().to_owned();
+    if !body_md.trim_start().starts_with('#') {
+        body_md = format!("# {title}\n\n{body_md}");
+    }
+    Ok(body_md.chars().count())
+}
+
 fn extract_with_readability(
     readability: &Readability,
     html: &str,

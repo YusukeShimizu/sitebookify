@@ -32,6 +32,16 @@ type Preview = {
   chapters: Array<{ title: string; pages: number }>;
   sample_urls: string[];
   notes: string[];
+  total_characters: number;
+  character_basis: "extracted_markdown";
+  estimated_input_tokens_min: number;
+  estimated_input_tokens_max: number;
+  estimated_output_tokens_min: number;
+  estimated_output_tokens_max: number;
+  estimated_cost_usd_min: number | null;
+  estimated_cost_usd_max: number | null;
+  pricing_model: string;
+  pricing_note: string | null;
 };
 
 function jobIdFromName(name: string): string {
@@ -44,6 +54,17 @@ function formatTimestamp(ms: number): string {
   } catch {
     return String(ms);
   }
+}
+
+function formatInt(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Math.max(0, Math.round(value)).toLocaleString();
+}
+
+function formatUsd(value: number | null): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+  const digits = value >= 1 ? 2 : 4;
+  return `$${value.toFixed(digits)}`;
 }
 
 export function HomePage({ client, navigate }: Props) {
@@ -247,6 +268,23 @@ export function HomePage({ client, navigate }: Props) {
           {preview?.notes?.length ? (
             <div className="muted hint" style={{ marginTop: 8 }}>
               {preview.notes.join(" \u2022 ")}
+            </div>
+          ) : null}
+
+          {preview ? (
+            <div className="muted hint" style={{ marginTop: 8 }}>
+              {formatInt(preview.total_characters)} chars ({preview.character_basis}) &middot; input{" "}
+              {formatInt(preview.estimated_input_tokens_min)}-{formatInt(preview.estimated_input_tokens_max)} tok
+              &middot; output {formatInt(preview.estimated_output_tokens_min)}-
+              {formatInt(preview.estimated_output_tokens_max)} tok
+              &middot; cost {formatUsd(preview.estimated_cost_usd_min)}-
+              {formatUsd(preview.estimated_cost_usd_max)} &middot; {preview.pricing_model}
+            </div>
+          ) : null}
+
+          {preview?.pricing_note ? (
+            <div className="muted hint" style={{ marginTop: 4 }}>
+              {preview.pricing_note}
             </div>
           ) : null}
 

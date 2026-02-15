@@ -1,7 +1,8 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use anyhow::Context as _;
+use readability_js::Readability;
 use serde::Serialize;
 use url::Url;
 
@@ -9,8 +10,15 @@ const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SITEMAP_LOCS: usize = 20_000;
 const MAX_SUB_SITEMAPS: usize = 5;
 const MAX_LINK_HREFS: usize = 500;
+const MAX_LINKS_PER_PAGE: usize = 200;
+const MAX_LINK_CRAWL_DEPTH: usize = 2;
+const MAX_LINK_CRAWL_PAGES: usize = 200;
 const MAX_SAMPLE_URLS: usize = 20;
 const MAX_CHAPTERS: usize = 12;
+const TOKEN_RANGE_MIN_RATIO: f64 = 0.85;
+const TOKEN_RANGE_MAX_RATIO: f64 = 1.15;
+const DEFAULT_TOKEN_PER_CHAR_INPUT: f64 = 0.25;
+const DEFAULT_TOKEN_PER_CHAR_OUTPUT: f64 = 0.125;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -26,7 +34,13 @@ pub struct PreviewChapter {
     pub pages: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewCharacterBasis {
+    ExtractedMarkdown,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SitePreview {
     pub source: PreviewSource,
     pub estimated_pages: usize,
@@ -34,6 +48,64 @@ pub struct SitePreview {
     pub chapters: Vec<PreviewChapter>,
     pub sample_urls: Vec<String>,
     pub notes: Vec<String>,
+    pub total_characters: u64,
+    pub character_basis: PreviewCharacterBasis,
+    pub estimated_input_tokens_min: u64,
+    pub estimated_input_tokens_max: u64,
+    pub estimated_output_tokens_min: u64,
+    pub estimated_output_tokens_max: u64,
+    pub estimated_cost_usd_min: Option<f64>,
+    pub estimated_cost_usd_max: Option<f64>,
+    pub pricing_model: String,
+    pub pricing_note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PreviewPricingConfig {
+    model: String,
+    input_usd_per_1m: Option<f64>,
+    output_usd_per_1m: Option<f64>,
+    token_per_char_input: f64,
+    token_per_char_output: f64,
+}
+
+impl PreviewPricingConfig {
+    fn from_env() -> Self {
+        let model = std::env::var("SITEBOOKIFY_PRICING_MODEL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| {
+                std::env::var("SITEBOOKIFY_OPENAI_MODEL")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+            })
+            .unwrap_or_else(|| "gpt-5.2".to_string());
+
+        let input_usd_per_1m = parse_env_non_negative_f64("SITEBOOKIFY_PRICING_INPUT_USD_PER_1M");
+        let output_usd_per_1m = parse_env_non_negative_f64("SITEBOOKIFY_PRICING_OUTPUT_USD_PER_1M");
+        let token_per_char_input = parse_env_positive_f64(
+            "SITEBOOKIFY_PRICING_TOKEN_PER_CHAR_INPUT",
+            DEFAULT_TOKEN_PER_CHAR_INPUT,
+        );
+        let token_per_char_output = parse_env_positive_f64(
+            "SITEBOOKIFY_PRICING_TOKEN_PER_CHAR_OUTPUT",
+            DEFAULT_TOKEN_PER_CHAR_OUTPUT,
+        );
+
+        Self {
+            model,
+            input_usd_per_1m,
+            output_usd_per_1m,
+            token_per_char_input,
+            token_per_char_output,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TokenRange {
+    min: u64,
+    max: u64,
 }
 
 pub async fn preview_site(start_url: &Url) -> anyhow::Result<SitePreview> {
@@ -57,22 +129,31 @@ async fn preview_site_with_client(
         anyhow::bail!("url must include host");
     };
 
-    let sitemap_url = with_path(start_url, "/sitemap.xml")?;
-    if let Ok(Some(sitemap)) = try_fetch_text(client, &sitemap_url).await {
-        let lower = sitemap.text.to_ascii_lowercase();
-        let is_index = lower.contains("<sitemapindex");
-        if is_index {
-            if let Some(out) =
-                preview_from_sitemap_index(client, start_url, host, &sitemap.text).await?
-            {
-                return Ok(out);
+    let mut preview = {
+        let sitemap_url = with_path(start_url, "/sitemap.xml")?;
+        if let Ok(Some(sitemap)) = try_fetch_text(client, &sitemap_url).await {
+            let lower = sitemap.text.to_ascii_lowercase();
+            let is_index = lower.contains("<sitemapindex");
+            if is_index {
+                if let Some(out) =
+                    preview_from_sitemap_index(client, start_url, host, &sitemap.text).await?
+                {
+                    out
+                } else {
+                    preview_from_links(client, start_url, host).await?
+                }
+            } else if let Some(out) = preview_from_sitemap_urlset(start_url, host, &sitemap.text) {
+                out
+            } else {
+                preview_from_links(client, start_url, host).await?
             }
-        } else if let Some(out) = preview_from_sitemap_urlset(start_url, host, &sitemap.text) {
-            return Ok(out);
+        } else {
+            preview_from_links(client, start_url, host).await?
         }
-    }
+    };
 
-    preview_from_links(client, start_url, host).await
+    enrich_preview_with_estimates(client, &mut preview).await;
+    Ok(preview)
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +250,25 @@ fn canonical_url(url: &Url) -> Url {
     canonical
 }
 
+fn join_href(base_url: &Url, href: &str) -> Result<Url, url::ParseError> {
+    if href.starts_with("http://") || href.starts_with("https://") || href.starts_with('/') {
+        return base_url.join(href);
+    }
+
+    if base_url.path().ends_with('/') {
+        return base_url.join(href);
+    }
+
+    let mut adjusted = base_url.clone();
+    let last_segment = adjusted.path().rsplit('/').next().unwrap_or("");
+    if !last_segment.contains('.') {
+        let mut path = adjusted.path().to_string();
+        path.push('/');
+        adjusted.set_path(&path);
+    }
+    adjusted.join(href)
+}
+
 fn chapter_key(start_url: &Url, page_url: &Url) -> String {
     let base_path = {
         let p = start_url.path();
@@ -232,6 +332,16 @@ fn summarize(
         chapters: chapters.into_iter().take(MAX_CHAPTERS).collect(),
         sample_urls,
         notes,
+        total_characters: 0,
+        character_basis: PreviewCharacterBasis::ExtractedMarkdown,
+        estimated_input_tokens_min: 0,
+        estimated_input_tokens_max: 0,
+        estimated_output_tokens_min: 0,
+        estimated_output_tokens_max: 0,
+        estimated_cost_usd_min: None,
+        estimated_cost_usd_max: None,
+        pricing_model: String::new(),
+        pricing_note: None,
     }
 }
 
@@ -339,39 +449,269 @@ async fn preview_from_links(
     start_url: &Url,
     host: &str,
 ) -> anyhow::Result<SitePreview> {
-    let Some(fetched) = try_fetch_text(client, start_url).await? else {
-        anyhow::bail!("failed to fetch start url: {start_url}");
-    };
-
-    let hrefs = extract_html_hrefs(&fetched.text);
+    let start_url = canonical_url(start_url);
     let mut notes = Vec::new();
-    if fetched.truncated {
-        notes.push("html response was truncated".to_string());
-    }
+    let mut queued: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<(Url, usize)> = VecDeque::new();
+    let mut pages = Vec::new();
+    let mut truncated_any = false;
+    let mut page_limit_reached = false;
+    let mut per_page_link_cap_hit = false;
+    let mut max_depth_reached = false;
 
-    let mut uniq: HashSet<String> = HashSet::new();
-    let mut pages: Vec<Url> = Vec::new();
-    for href in hrefs.into_iter().take(MAX_LINK_HREFS) {
-        let href = href.trim();
-        if href.is_empty() {
-            continue;
+    queued.insert(start_url.to_string());
+    queue.push_back((start_url.clone(), 0));
+
+    while let Some((current_url, depth)) = queue.pop_front() {
+        if pages.len() >= MAX_LINK_CRAWL_PAGES {
+            page_limit_reached = true;
+            break;
         }
-        let Ok(u) = start_url.join(href) else {
+
+        let Some(fetched) = try_fetch_text(client, &current_url).await? else {
             continue;
         };
-        if u.host_str() != Some(host) {
+        truncated_any |= fetched.truncated;
+        pages.push(current_url.clone());
+
+        let hrefs = extract_html_hrefs(&fetched.text);
+        if hrefs.len() > MAX_LINKS_PER_PAGE {
+            per_page_link_cap_hit = true;
+        }
+        if depth >= MAX_LINK_CRAWL_DEPTH {
+            if !hrefs.is_empty() {
+                max_depth_reached = true;
+            }
             continue;
         }
-        if u.scheme() != "http" && u.scheme() != "https" {
-            continue;
-        }
-        let u = canonical_url(&u);
-        if uniq.insert(u.to_string()) {
-            pages.push(u);
+
+        for href in hrefs.into_iter().take(MAX_LINKS_PER_PAGE) {
+            let href = href.trim();
+            if href.is_empty() {
+                continue;
+            }
+            let Ok(next_url) = join_href(&current_url, href) else {
+                continue;
+            };
+            if next_url.host_str() != Some(host) {
+                continue;
+            }
+            if next_url.scheme() != "http" && next_url.scheme() != "https" {
+                continue;
+            }
+            let next_url = canonical_url(&next_url);
+            if queued.insert(next_url.to_string()) {
+                queue.push_back((next_url, depth + 1));
+            }
         }
     }
 
-    Ok(summarize(start_url, PreviewSource::Links, &pages, notes))
+    if pages.is_empty() {
+        anyhow::bail!("failed to fetch start url: {start_url}");
+    }
+
+    if truncated_any {
+        notes.push("some html responses were truncated".to_string());
+    }
+    if page_limit_reached {
+        notes.push(format!(
+            "link crawl reached page limit ({MAX_LINK_CRAWL_PAGES})"
+        ));
+    }
+    if max_depth_reached {
+        notes.push(format!(
+            "link crawl reached depth limit ({MAX_LINK_CRAWL_DEPTH})"
+        ));
+    }
+    if per_page_link_cap_hit {
+        notes.push(format!(
+            "some pages exceeded per-page link cap ({MAX_LINKS_PER_PAGE})"
+        ));
+    }
+
+    Ok(summarize(&start_url, PreviewSource::Links, &pages, notes))
+}
+
+async fn enrich_preview_with_estimates(client: &reqwest::Client, preview: &mut SitePreview) {
+    let pricing = PreviewPricingConfig::from_env();
+    preview.pricing_model = pricing.model.clone();
+
+    let mut sampled_pages = 0usize;
+    let mut failed_pages = 0usize;
+    let mut truncated_pages = 0usize;
+    let mut sampled_characters = 0u64;
+    let mut fetched_samples: Vec<(String, String)> = Vec::new();
+
+    for sample_url in preview.sample_urls.iter().take(MAX_SAMPLE_URLS) {
+        let Ok(url) = Url::parse(sample_url) else {
+            failed_pages += 1;
+            continue;
+        };
+        let fetched = match try_fetch_text(client, &url).await {
+            Ok(Some(fetched)) => fetched,
+            Ok(None) => {
+                failed_pages += 1;
+                continue;
+            }
+            Err(_) => {
+                failed_pages += 1;
+                continue;
+            }
+        };
+
+        if fetched.truncated {
+            truncated_pages += 1;
+        }
+        fetched_samples.push((url.to_string(), fetched.text));
+    }
+
+    let readability = match Readability::new() {
+        Ok(readability) => readability,
+        Err(err) => {
+            preview.pricing_note = Some(format!(
+                "character/cost estimation unavailable: failed to init readability ({err})"
+            ));
+            return;
+        }
+    };
+
+    for (sample_url, html) in fetched_samples {
+        match crate::extract::preview_character_count_from_html(&readability, &html, &sample_url) {
+            Ok(count) => {
+                sampled_pages += 1;
+                sampled_characters = sampled_characters.saturating_add(count as u64);
+            }
+            Err(_) => {
+                failed_pages += 1;
+            }
+        }
+    }
+
+    if truncated_pages > 0 {
+        preview.notes.push(format!(
+            "character estimate: {truncated_pages} sampled html responses were truncated"
+        ));
+    }
+    if failed_pages > 0 {
+        preview.notes.push(format!(
+            "character estimate: failed to sample {failed_pages} pages"
+        ));
+    }
+
+    let total_characters = if sampled_pages == 0 {
+        preview
+            .notes
+            .push("character estimate: no sample pages could be parsed".to_string());
+        0
+    } else if preview.estimated_pages > sampled_pages {
+        let avg = sampled_characters as f64 / sampled_pages as f64;
+        let scaled = (avg * preview.estimated_pages as f64).round() as u64;
+        preview.notes.push(format!(
+            "character estimate extrapolated from {sampled_pages}/{} sampled pages",
+            preview.estimated_pages
+        ));
+        scaled
+    } else {
+        sampled_characters
+    };
+
+    preview.total_characters = total_characters;
+
+    let input_base = ceil_to_u64(total_characters as f64 * pricing.token_per_char_input);
+    let output_base = ceil_to_u64(total_characters as f64 * pricing.token_per_char_output);
+    let input_range = estimate_token_range(input_base);
+    let output_range = estimate_token_range(output_base);
+    preview.estimated_input_tokens_min = input_range.min;
+    preview.estimated_input_tokens_max = input_range.max;
+    preview.estimated_output_tokens_min = output_range.min;
+    preview.estimated_output_tokens_max = output_range.max;
+
+    if let (Some(input_price), Some(output_price)) =
+        (pricing.input_usd_per_1m, pricing.output_usd_per_1m)
+    {
+        let input_unit = input_price / 1_000_000.0;
+        let output_unit = output_price / 1_000_000.0;
+        let cost_min = input_range.min as f64 * input_unit + output_range.min as f64 * output_unit;
+        let cost_max = input_range.max as f64 * input_unit + output_range.max as f64 * output_unit;
+        preview.estimated_cost_usd_min = Some(round_money(cost_min));
+        preview.estimated_cost_usd_max = Some(round_money(cost_max));
+        preview.pricing_note = Some(format!(
+            "cost estimate uses model={} and env rates input=${input_price}/1M output=${output_price}/1M",
+            pricing.model
+        ));
+    } else {
+        preview.pricing_note = Some(
+            "cost estimate unavailable: set SITEBOOKIFY_PRICING_INPUT_USD_PER_1M and SITEBOOKIFY_PRICING_OUTPUT_USD_PER_1M".to_string(),
+        );
+    }
+}
+
+fn estimate_token_range(base: u64) -> TokenRange {
+    if base == 0 {
+        return TokenRange { min: 0, max: 0 };
+    }
+    let min = floor_to_u64(base as f64 * TOKEN_RANGE_MIN_RATIO);
+    let max = ceil_to_u64(base as f64 * TOKEN_RANGE_MAX_RATIO);
+    TokenRange {
+        min: min.max(1),
+        max: max.max(min.max(1)),
+    }
+}
+
+fn parse_env_non_negative_f64(name: &str) -> Option<f64> {
+    let raw = std::env::var(name).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.parse::<f64>() {
+        Ok(v) if v.is_finite() && v >= 0.0 => Some(v),
+        _ => {
+            tracing::warn!(env_var = name, value = %trimmed, "invalid float env; ignoring");
+            None
+        }
+    }
+}
+
+fn parse_env_positive_f64(name: &str, default: f64) -> f64 {
+    let raw = match std::env::var(name) {
+        Ok(raw) => raw,
+        Err(_) => return default,
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return default;
+    }
+    match trimmed.parse::<f64>() {
+        Ok(v) if v.is_finite() && v > 0.0 => v,
+        _ => {
+            tracing::warn!(
+                env_var = name,
+                value = %trimmed,
+                default = default,
+                "invalid positive float env; fallback to default"
+            );
+            default
+        }
+    }
+}
+
+fn round_money(value: f64) -> f64 {
+    (value * 1_000_000.0).round() / 1_000_000.0
+}
+
+fn ceil_to_u64(value: f64) -> u64 {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    value.ceil() as u64
+}
+
+fn floor_to_u64(value: f64) -> u64 {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    value.floor() as u64
 }
 
 fn extract_html_hrefs(html: &str) -> Vec<String> {
@@ -451,7 +791,7 @@ mod tests {
                         "application/xml",
                     ),
                     "/sitemap.xml" => (404, "not found".to_string(), "text/plain"),
-                    "/docs/" => (
+                    "/docs" | "/docs/" => (
                         200,
                         r#"<!doctype html>
 <html>
@@ -465,8 +805,32 @@ mod tests {
                         .to_string(),
                         "text/html",
                     ),
-                    "/docs/intro" => (200, "Intro".to_string(), "text/plain"),
+                    "/docs/intro" => (
+                        200,
+                        r#"<!doctype html>
+<html>
+  <body>
+    <a href="/docs/guide/part-1">Part 1</a>
+  </body>
+</html>
+"#
+                        .to_string(),
+                        "text/html",
+                    ),
                     "/docs/advanced" => (200, "Advanced".to_string(), "text/plain"),
+                    "/docs/guide/part-1" => (
+                        200,
+                        r#"<!doctype html>
+<html>
+  <body>
+    <a href="/docs/guide/part-2">Part 2</a>
+  </body>
+</html>
+"#
+                        .to_string(),
+                        "text/html",
+                    ),
+                    "/docs/guide/part-2" => (200, "Part 2".to_string(), "text/plain"),
                     "/outside" => (200, "Outside".to_string(), "text/plain"),
                     _ => (404, "not found".to_string(), "text/plain"),
                 };
@@ -483,6 +847,13 @@ mod tests {
         (base_url, shutdown_tx, handle)
     }
 
+    #[test]
+    fn token_range_has_expected_spread() {
+        let range = estimate_token_range(100);
+        assert_eq!(range.min, 85);
+        assert_eq!(range.max, 115);
+    }
+
     #[tokio::test]
     async fn preview_uses_sitemap_when_available() {
         let (base_url, shutdown_tx, handle) = spawn_preview_server(true);
@@ -492,19 +863,38 @@ mod tests {
         assert_eq!(out.source, PreviewSource::Sitemap);
         assert_eq!(out.estimated_pages, 2);
         assert_eq!(out.estimated_chapters, 2);
+        assert_eq!(
+            out.character_basis,
+            PreviewCharacterBasis::ExtractedMarkdown
+        );
 
         let _ = shutdown_tx.send(());
         let _ = handle.join();
     }
 
     #[tokio::test]
-    async fn preview_falls_back_to_links_when_no_sitemap() {
+    async fn preview_falls_back_to_link_crawl_when_no_sitemap() {
         let (base_url, shutdown_tx, handle) = spawn_preview_server(false);
         let start_url = Url::parse(&format!("{base_url}/docs/")).unwrap();
 
         let out = preview_site(&start_url).await.unwrap();
         assert_eq!(out.source, PreviewSource::Links);
-        assert!(out.estimated_pages >= 2);
+        assert!(out.estimated_pages >= 4);
+        assert!(
+            out.sample_urls
+                .iter()
+                .any(|u| u.ends_with("/docs/guide/part-1"))
+        );
+        assert!(
+            !out.sample_urls
+                .iter()
+                .any(|u| u.ends_with("/docs/guide/part-2"))
+        );
+        assert!(
+            out.notes.iter().any(|n| n.contains("depth limit (2)")),
+            "expected depth-limit note, got {:?}",
+            out.notes
+        );
 
         let _ = shutdown_tx.send(());
         let _ = handle.join();

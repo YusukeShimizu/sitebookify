@@ -13,6 +13,17 @@ use crate::cli::{
 };
 use crate::formats::Toc;
 
+const STAGE_STARTING: &str = "starting";
+const STAGE_CRAWL: &str = "crawl";
+const STAGE_EXTRACT: &str = "extract";
+const STAGE_MANIFEST: &str = "manifest";
+const STAGE_TOC: &str = "toc";
+const STAGE_BOOK_INIT: &str = "book init";
+const STAGE_BOOK_RENDER: &str = "book render";
+const STAGE_BOOK_BUNDLE: &str = "book bundle";
+const STAGE_BOOK_EPUB: &str = "book epub";
+const STAGE_DONE: &str = "done";
+
 pub struct JobRunner {
     job_store: Arc<dyn JobStore>,
     artifact_store: Arc<dyn ArtifactStore>,
@@ -62,7 +73,7 @@ impl JobRunner {
 
         job.status = JobStatus::Done;
         job.progress_percent = 100;
-        job.message = "done".to_string();
+        job.message = STAGE_DONE.to_string();
         job.finished_at = Some(Utc::now());
         job.artifact_path = Some(artifact_path);
         job.artifact_uri = Some(self.artifact_store.artifact_uri(job_id));
@@ -75,7 +86,7 @@ impl JobRunner {
         job.status = JobStatus::Running;
         job.started_at = Some(Utc::now());
         job.progress_percent = 0;
-        job.message = "starting".to_string();
+        job.message = STAGE_STARTING.to_string();
         self.job_store.put(job).await.context("save job")?;
         Ok(())
     }
@@ -116,7 +127,7 @@ impl JobRunner {
         let bundled_md_path = job.work_dir.join("book.md");
         let epub_path = job.work_dir.join("book.epub");
 
-        self.update_progress(job, 5, "crawl").await?;
+        self.update_progress(job, 5, STAGE_CRAWL).await?;
         crate::crawl::run(CrawlArgs {
             url: request.url.clone(),
             out: raw_dir.to_string_lossy().to_string(),
@@ -128,21 +139,21 @@ impl JobRunner {
         .await
         .context("crawl")?;
 
-        self.update_progress(job, 25, "extract").await?;
+        self.update_progress(job, 25, STAGE_EXTRACT).await?;
         crate::extract::run(ExtractArgs {
             raw: raw_dir.to_string_lossy().to_string(),
             out: extracted_dir.to_string_lossy().to_string(),
         })
         .context("extract")?;
 
-        self.update_progress(job, 40, "manifest").await?;
+        self.update_progress(job, 40, STAGE_MANIFEST).await?;
         crate::manifest::run(ManifestArgs {
             extracted: extracted_dir.to_string_lossy().to_string(),
             out: manifest_path.to_string_lossy().to_string(),
         })
         .context("manifest")?;
 
-        self.update_progress(job, 55, "toc").await?;
+        self.update_progress(job, 55, STAGE_TOC).await?;
         crate::toc::create(TocCreateArgs {
             manifest: manifest_path.to_string_lossy().to_string(),
             out: toc_path.to_string_lossy().to_string(),
@@ -159,14 +170,14 @@ impl JobRunner {
             .with_context(|| format!("read toc: {}", toc_path.display()))?;
         let toc: Toc = serde_yaml::from_str(&toc_yaml).context("parse toc")?;
 
-        self.update_progress(job, 65, "book init").await?;
+        self.update_progress(job, 65, STAGE_BOOK_INIT).await?;
         crate::book::init(BookInitArgs {
             out: book_dir.to_string_lossy().to_string(),
             title: toc.book_title,
         })
         .context("book init")?;
 
-        self.update_progress(job, 75, "book render").await?;
+        self.update_progress(job, 75, STAGE_BOOK_RENDER).await?;
         let render_args = BookRenderArgs {
             toc: toc_path.to_string_lossy().to_string(),
             manifest: manifest_path.to_string_lossy().to_string(),
@@ -177,7 +188,7 @@ impl JobRunner {
         };
         tokio::task::block_in_place(|| crate::book::render(render_args)).context("book render")?;
 
-        self.update_progress(job, 90, "book bundle").await?;
+        self.update_progress(job, 90, STAGE_BOOK_BUNDLE).await?;
         crate::book::bundle(BookBundleArgs {
             book: book_dir.to_string_lossy().to_string(),
             out: bundled_md_path.to_string_lossy().to_string(),
@@ -185,7 +196,7 @@ impl JobRunner {
         })
         .context("book bundle")?;
 
-        self.update_progress(job, 95, "book epub").await?;
+        self.update_progress(job, 95, STAGE_BOOK_EPUB).await?;
         crate::epub::create_from_mdbook(
             &book_dir,
             &epub_path,

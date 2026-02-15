@@ -101,6 +101,29 @@ echo 'export SITEBOOKIFY_OPENAI_REASONING_EFFORT=high' >> .envrc.local
 direnv allow
 ```
 
+Preview API (`/preview`) では、文字数・トークン見積り・料金見積りを返す。  
+料金見積りの単価は環境変数で管理する（未設定時は料金のみ `unavailable` 表示）。
+
+```sh
+# 任意: preview の表示モデル名（未指定時は SITEBOOKIFY_OPENAI_MODEL を使用）
+echo 'export SITEBOOKIFY_PRICING_MODEL=gpt-5.2' >> .envrc.local
+
+# 必須: 料金見積りを有効にする場合の単価（USD / 1M tokens）
+echo 'export SITEBOOKIFY_PRICING_INPUT_USD_PER_1M=1.25' >> .envrc.local
+echo 'export SITEBOOKIFY_PRICING_OUTPUT_USD_PER_1M=10.0' >> .envrc.local
+
+# 任意: 文字数→トークン換算係数（未指定時は input=0.25, output=0.125）
+echo 'export SITEBOOKIFY_PRICING_TOKEN_PER_CHAR_INPUT=0.25' >> .envrc.local
+echo 'export SITEBOOKIFY_PRICING_TOKEN_PER_CHAR_OUTPUT=0.125' >> .envrc.local
+direnv allow
+```
+
+単価更新手順:
+
+1. `.envrc.local` の `SITEBOOKIFY_PRICING_*` を更新する。
+2. `direnv allow` を実行する。
+3. `GET /preview?url=...` を叩き、`estimated_cost_usd_min/max` が期待値で変わることを確認する。
+
 ワークスペースの中身（MVP）は次の通り。
 
 ```text

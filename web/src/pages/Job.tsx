@@ -25,6 +25,20 @@ type UiState = {
 };
 
 type VisualPhase = "loading" | "processing" | "compiling" | "done" | "error";
+type JobStageKey =
+  | "queued"
+  | "starting"
+  | "crawl"
+  | "extract"
+  | "manifest"
+  | "toc"
+  | "book_init"
+  | "book_render"
+  | "book_bundle"
+  | "book_epub"
+  | "done"
+  | "unknown";
+type ErrorCategory = "network" | "extract" | "ai" | "render" | "unknown";
 
 function jobName(jobId: string): string {
   return `jobs/${jobId}`;
@@ -63,6 +77,111 @@ function getPhase(job: Job | null): VisualPhase {
   if (job.state === Job_State.DONE) return "done";
   if (job.state === Job_State.RUNNING && (job.progressPercent ?? 0) > 0) return "compiling";
   return "processing";
+}
+
+function normalizeJobStage(message?: string): JobStageKey {
+  const normalized = (message ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "queued":
+      return "queued";
+    case "starting":
+      return "starting";
+    case "crawl":
+      return "crawl";
+    case "extract":
+      return "extract";
+    case "manifest":
+      return "manifest";
+    case "toc":
+      return "toc";
+    case "book init":
+      return "book_init";
+    case "book render":
+      return "book_render";
+    case "book bundle":
+      return "book_bundle";
+    case "book epub":
+      return "book_epub";
+    case "done":
+      return "done";
+    default:
+      break;
+  }
+
+  if (normalized.includes("crawl")) return "crawl";
+  if (normalized.includes("extract")) return "extract";
+  if (normalized.includes("manifest")) return "manifest";
+  if (normalized.includes("toc")) return "toc";
+  if (normalized.includes("book init")) return "book_init";
+  if (normalized.includes("book render")) return "book_render";
+  if (normalized.includes("book bundle")) return "book_bundle";
+  if (normalized.includes("book epub")) return "book_epub";
+  return "unknown";
+}
+
+function stageLabel(stage: JobStageKey): string {
+  switch (stage) {
+    case "queued":
+      return "Queued";
+    case "starting":
+      return "Starting";
+    case "crawl":
+      return "Crawling pages";
+    case "extract":
+      return "Extracting content";
+    case "manifest":
+      return "Building manifest";
+    case "toc":
+      return "Generating table of contents";
+    case "book_init":
+      return "Preparing renderer";
+    case "book_render":
+      return "Rendering book";
+    case "book_bundle":
+      return "Bundling output";
+    case "book_epub":
+      return "Creating EPUB";
+    case "done":
+      return "Done";
+    default:
+      return "Processing";
+  }
+}
+
+function classifyErrorCategory(message?: string): ErrorCategory {
+  const normalized = (message ?? "").toLowerCase();
+  if (
+    normalized.includes("timeout") ||
+    normalized.includes("connection") ||
+    normalized.includes("dns") ||
+    normalized.includes("network") ||
+    normalized.includes("failed to fetch")
+  ) {
+    return "network";
+  }
+  if (
+    normalized.includes("extract") ||
+    normalized.includes("readability") ||
+    normalized.includes("front matter")
+  ) {
+    return "extract";
+  }
+  if (
+    normalized.includes("openai") ||
+    normalized.includes("responses api") ||
+    normalized.includes("toc create")
+  ) {
+    return "ai";
+  }
+  if (
+    normalized.includes("book render") ||
+    normalized.includes("book bundle") ||
+    normalized.includes("book epub") ||
+    normalized.includes("mdbook")
+  ) {
+    return "render";
+  }
+  return "unknown";
 }
 
 export function JobPage({ client, jobId, navigate }: Props) {
@@ -208,6 +327,9 @@ export function JobPage({ client, jobId, navigate }: Props) {
   const progressPercent = job?.progressPercent ?? 0;
   const phase = getPhase(job);
   const sourceUrl = job?.spec?.sourceUrl;
+  const currentStage = normalizeJobStage(job?.message);
+  const currentStageLabel = stageLabel(currentStage);
+  const errorCategory = classifyErrorCategory(job?.message);
 
   return (
     <div className="hero">
@@ -229,41 +351,10 @@ export function JobPage({ client, jobId, navigate }: Props) {
         <div style={{ padding: "40px 0" }}>
           <div className="jobIcon">🌐</div>
           <h2 className="title" style={{ fontSize: 28 }}>
-            Reading
+            {currentStageLabel}
           </h2>
           {sourceUrl ? <p className="muted">{sourceUrl}</p> : null}
-          <ul className="stepList">
-            <li className={job?.state === Job_State.QUEUED ? "active" : "done"}>
-              {job?.state === Job_State.QUEUED ? (
-                <span className="spinner" />
-              ) : (
-                <span>&#10003;</span>
-              )}
-              Queued for processing
-            </li>
-            <li
-              className={
-                job?.state === Job_State.RUNNING ? "active" : job?.state === Job_State.QUEUED ? "" : "done"
-              }
-            >
-              {job?.state === Job_State.RUNNING ? (
-                <span className="spinner" />
-              ) : job?.state === Job_State.QUEUED ? (
-                <span style={{ width: 18 }}>&bull;</span>
-              ) : (
-                <span>&#10003;</span>
-              )}
-              Fetching pages
-            </li>
-            <li>
-              <span style={{ width: 18 }}>&bull;</span>
-              Building table of contents
-            </li>
-            <li>
-              <span style={{ width: 18 }}>&bull;</span>
-              Generating book
-            </li>
-          </ul>
+          <p className="muted hint">phase: {currentStage}</p>
           {job?.message ? <div className="compileLog">{job.message}</div> : null}
         </div>
       ) : null}
@@ -273,9 +364,10 @@ export function JobPage({ client, jobId, navigate }: Props) {
         <div className="compileCard">
           <div className="jobIcon">📖</div>
           <h2 className="title" style={{ fontSize: 28 }}>
-            Compiling... {progressPercent}%
+            {currentStageLabel}... {progressPercent}%
           </h2>
           {sourceUrl ? <p className="muted">{sourceUrl}</p> : null}
+          <p className="muted hint">phase: {currentStage}</p>
           {job?.message ? <div className="compileLog">{job.message}</div> : null}
           <div className="compileProgress">
             <div className="progress" aria-label="progress">
@@ -382,6 +474,7 @@ export function JobPage({ client, jobId, navigate }: Props) {
             Something went wrong.
           </h2>
           <p className="muted">{job?.message || "An unknown error occurred."}</p>
+          <p className="muted hint">category: {errorCategory}</p>
           <div className="heroButtons" style={{ marginTop: 20 }}>
             <button
               className="btnPrimary"
